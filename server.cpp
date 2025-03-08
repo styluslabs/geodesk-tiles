@@ -44,7 +44,7 @@ int main(int argc, char* argv[])
   struct Stats_t { std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0; } stats;
   const char* worldDBPath = argc > 3 ? argv[3] : "planet.mbtiles";
   // WAL allows simultaneous reading and writing
-  static const char* schemaSQL = R"(PRAGMA journal_mode=WAL;
+  static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
   BEGIN;
     CREATE TABLE IF NOT EXISTS tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
     CREATE UNIQUE INDEX IF NOT EXISTS tile_index on tiles (zoom_level, tile_column, tile_row);

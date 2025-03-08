@@ -13,33 +13,44 @@ endif
 
 include make/shared.mk
 
+
 ## sqlite
-MODULE_BASE = tangram-es/core/deps/sqlite3
+MODULE_BASE = sqlite3
 
 MODULE_SOURCES = sqlite3.c
 MODULE_INC_PUBLIC = .
-MODULE_DEFS_PRIVATE = SQLITE_ENABLE_FTS5
+#MODULE_DEFS_PRIVATE = SQLITE_ENABLE_FTS5
 MODULE_DEFS_PUBLIC = SQLITE_USE_URI=1
 
 include $(ADD_MODULE)
 
+# if only sqlite3.h is included here, first run of make will fail to build sqlite3.o
+SQLITE_BASE := $(MODULE_BASE)
+SQLITE_GEN := $(SQLITE_BASE)/sqlite3.h $(SQLITE_BASE)/sqlite3.c
+GENERATED += $(SQLITE_GEN)
+
+$(SQLITE_GEN):
+	cd $(SQLITE_BASE) && curl "https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip" -o sqlite.zip && unzip sqlite.zip && mv sqlite-amalgamation-3490100/sqlite3.* .
+
+
 ## geodesk
-MODULE_BASE = deps/libgeodesk
+MODULE_BASE = libgeodesk
 
 rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
 MODULE_FULL_SOURCES = $(call rwildcard,$(MODULE_BASE)/src,*.cpp)
 #MODULE_FULL_SOURCES = $(wildcard $(MODULE_BASE)/src/*/*.cpp)
 MODULE_INC_PUBLIC = include src
 
-MODULE_CXXFLAGS = --std=c++20 -Wno-unknown-pragmas -Wno-reorder
+MODULE_CXXFLAGS = -Wno-unknown-pragmas -Wno-reorder
 
 include $(ADD_MODULE)
+
 
 ## server
 MODULE_BASE := .
 
 MODULE_SOURCES = \
-  tangram-es/core/deps/miniz/miniz.c \
+  miniz/miniz.c \
   scripts/tilebuilder.cpp \
   scripts/ascendtiles.cpp
 
@@ -50,13 +61,12 @@ else
 endif
 
 MODULE_INC_PRIVATE = \
-  $(STYLUSLABS_DEPS) \
   deps/vtzero/include \
   deps/protozero/include
 
 #MODULE_DEFS_PRIVATE = PUGIXML_NO_XPATH PUGIXML_NO_EXCEPTIONS SVGGUI_NO_SDL
 
-MODULE_CXXFLAGS = --std=c++20 -Wno-unknown-pragmas -Wno-reorder
+MODULE_CXXFLAGS = -Wno-unknown-pragmas -Wno-reorder
 
 include $(ADD_MODULE)
 

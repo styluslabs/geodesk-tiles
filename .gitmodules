@@ -10,10 +10,6 @@
 	path = vtzero
 	url = https://github.com/mapbox/vtzero
 	shallow = true
-[submodule "miniz"]
-	path = miniz
-	url = https://github.com/richgel999/miniz
-	shallow = true
 [submodule "libgeodesk"]
 	path = libgeodesk
 	url = https://github.com/pbsurf/libgeodesk

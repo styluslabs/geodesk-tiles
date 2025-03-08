@@ -7,7 +7,7 @@ CFLAGS += -MMD -g -Wall -Werror=return-type -Wno-strict-aliasing
 #-Wshadow
 # C++; -Wconditionally-supported catches passing non-POD to varargs fn
 CXX = g++
-CXXFLAGS += --std=c++14 -Werror=conditionally-supported -Wno-class-memaccess
+CXXFLAGS += --std=c++20 -Werror=conditionally-supported -Wno-class-memaccess
 #-fno-rtti -fno-exceptions -Wno-unused-parameter -Wno-unused-function -Wno-unused
 # C
 CC = gcc
