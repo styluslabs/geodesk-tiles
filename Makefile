@@ -51,8 +51,8 @@ MODULE_BASE := .
 
 MODULE_SOURCES = \
   miniz/miniz.c \
-  scripts/tilebuilder.cpp \
-  scripts/ascendtiles.cpp
+  tilebuilder.cpp \
+  ascendtiles.cpp
 
 ifneq ($(SERVER), 0)
   MODULE_SOURCES += scripts/server.cpp
@@ -61,8 +61,8 @@ else
 endif
 
 MODULE_INC_PRIVATE = \
+  . \
   sqlite3 \
-  miniz \
   cpp-httplib \
   vtzero/include \
   protozero/include
@@ -75,3 +75,5 @@ include $(ADD_MODULE)
 
 #$(info server: $(SOURCES))
 include make/unix.mk
+
+.DEFAULT_GOAL := all

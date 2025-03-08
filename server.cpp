@@ -1,5 +1,6 @@
 // Serve tiles from multiple mbtiles files, generating missing tiles on demand
 
+#include <format>
 #include <map>
 #include "tilebuilder.h"
 #define SQLITEPP_LOGE LOG

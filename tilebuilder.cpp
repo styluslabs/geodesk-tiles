@@ -4,7 +4,7 @@
 #include <geom/polygon/Segment.h>
 
 #define MINIZ_GZ_IMPLEMENTATION
-#include "ulib/miniz_gzip.h"
+#include "miniz/miniz_gzip.h"
 
 // TileBuilder
 
@@ -30,12 +30,12 @@ TileBuilder::TileBuilder(TileID _id, const std::vector<std::string>& layers) : m
   simplifyThresh = _id.z < 14 ? 1/512.0f : 0;  // no simplification for highest zoom (which can be overzoomed)
 }
 
-static LngLat tileCoordToLngLat(const TileID& tileId, const glm::vec2& tileCoord)
+static LngLat tileCoordToLngLat(const TileID& tileId, glm::dvec2 tileCoord)
 {
   //using namespace Tangram;
   double scale = MapProjection::metersPerTileAtZoom(tileId.z);
   ProjectedMeters tileOrigin = MapProjection::tileSouthWestCorner(tileId);
-  ProjectedMeters meters = glm::dvec2(tileCoord) * scale + tileOrigin;
+  ProjectedMeters meters = tileCoord * scale + tileOrigin;
   return MapProjection::projectedMetersToLngLat(meters);
 }
 

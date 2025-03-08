@@ -41,59 +41,6 @@ std::string buildTile(const Features& world, const Features& ocean, TileID id)
   }
 }
 
-#ifdef ASCENDTILES_MAIN
-int main(int argc, char* argv[])
-{
-  if(argc < 3) {
-    LOG("No gol file specified!");
-    return -1;
-  }
-
-  Features world(argv[1]);
-  Features ocean(argv[2]);
-  LOG("Loaded %s and %s", argv[1], argv[2]);
-
-  TileBuilder::worldFeats = &world;
-
-  // for(int x = 2616; x <= 2621; ++x) {
-  //   for(int y = 6331; y <= 6336; ++y) {
-  //     TileID id(x, y, 14);
-  //     std::string mvt = buildTile(world, id);
-  //   }
-  // }
-
-  {
-    TileID id(2617, 6332, 14);  // Alamo square!
-    while(id.z > 9) {
-      std::string mvt = buildTile(world, ocean, id);
-      id = id.getParent();
-    }
-    //std::string mvt = buildTile(world, ocean, id);
-    return 0;
-  }
-  {
-    TileID id(2615, 6329, 14);
-    int ydb = (1 << id.z) - 1 - id.y;
-    std::string mvt = buildTile(world, ocean, id);
-  }
-  {
-    TileID id(2612, 6327, 14);  // missing islands
-    std::string mvt = buildTile(world, ocean, id);
-  }
-  {
-    TileID id(2609, 6334, 14);  // all ocean
-    std::string mvt = buildTile(world, ocean, id);
-  }
-
-  // while(id.z > 9) {
-  //   std::string mvt = buildTile(world, id);
-  //   id = id.getParent();
-  // }
-
-  return 0;
-}
-#endif
-
 // AscendTileBuilder impl
 
 struct Set {
@@ -146,7 +93,7 @@ void AscendTileBuilder::processFeature()
   }
   else if (feature().isWay()) { ProcessWay(); }
   else if (feature().isNode()) { ProcessNode(); }
-  else if (feature()["type"] == "multipolygon") { ProcessWay(); }
+  else if (Find("type") == "multipolygon") { ProcessWay(); }
   else { ProcessRelation(); }  //if (feature().isRelation())
   //else { LOG("Unknown feature type!"); }
 }
@@ -837,49 +784,57 @@ void AscendTileBuilder::WriteBoundary()
   }
 }
 
+// testing
 
-// attributes for features from shapefiles (set in config.json)
-// we set featurecla so scene YAML can distinguish features from Natural Earth
-// an alternative approach to using shapefiles is to convert shapefiles to OSM PBF using ogr2osm script and
-//  pass multiple PBFs to Tilemaker
-/*void attribute_function(attr, layer) {;
-  auto featurecla = attr["featurecla"]
-
-  if (featurecla == "Glaciated areas") {
-    return { class="ice", natural="glacier" }
-  } else if (featurecla == "Antarctic Ice Shelf") {
-    return { class="ice", natural="glacier", glacier_type="shelf" }
-  } else if (featurecla == "Urban area") {
-    return { class="residential" }
-  } else if (layer == "ocean") {
-    return { class="ocean" }
-
-  // ne_10m_lakes
-  } else if (layer == "ne_lakes") {
-    return { class="lake", water="lake", name=attr["name"], wikidata=attr["wikidataid"], rank=attr["scalerank"], featurecla=featurecla }
-
-  // ne_10m_admin_0_boundary_lines_land; can't use ne_10m_admin_0_countries because it includes shoreline
-  } else if (layer == "ne_boundaries") {
-    auto res = { admin_level=2;, adm0_l=attr["adm0_left"], adm0_r=attr["adm0_right"], featurecla=featurecla }
-    if (featurecla != "International boundary (verify);") { res["disputed"] = 1 }
-    return res
-
-  // ne_10m_populated_places
-  } else if (layer == "ne_populated_places") {
-    auto rank = attr["scalerank"]
-    auto z = rank < 6 and 3 or 6
-    return { _minzoom=z, class="city", place="city", name=attr["name"], population=attr["pop_max"], rank=rank, wikidata=attr["wikidataid"], featurecla=featurecla }
-
-  // ne_10m_roads
-  } else if (layer == "ne_roads") {
-    if (featurecla == "Ferry") {
-      return { _minzoom=3;, class="ferry", route="ferry", ref=attr["name"], rank=attr["scalerank"], featurecla=featurecla }
-    } else if (attr["expressway"] == 1) {
-      return { _minzoom=3;, class="motorway", highway="motorway", ref=attr["name"], rank=attr["scalerank"], featurecla=featurecla }
-    }
-    return { _minzoom=6;, class="trunk", highway="trunk", ref=attr["name"], rank=attr["scalerank"], featurecla=featurecla }
-
-  } else {
-    return attr
+#ifdef ASCENDTILES_MAIN
+int main(int argc, char* argv[])
+{
+  if(argc < 3) {
+    LOG("No gol file specified!");
+    return -1;
   }
-}*/
+
+  Features world(argv[1]);
+  Features ocean(argv[2]);
+  LOG("Loaded %s and %s", argv[1], argv[2]);
+
+  TileBuilder::worldFeats = &world;
+
+  // for(int x = 2616; x <= 2621; ++x) {
+  //   for(int y = 6331; y <= 6336; ++y) {
+  //     TileID id(x, y, 14);
+  //     std::string mvt = buildTile(world, id);
+  //   }
+  // }
+
+  {
+    TileID id(2617, 6332, 14);  // Alamo square!
+    while(id.z > 9) {
+      std::string mvt = buildTile(world, ocean, id);
+      id = id.getParent();
+    }
+    //std::string mvt = buildTile(world, ocean, id);
+    return 0;
+  }
+  {
+    TileID id(2615, 6329, 14);
+    int ydb = (1 << id.z) - 1 - id.y;
+    std::string mvt = buildTile(world, ocean, id);
+  }
+  {
+    TileID id(2612, 6327, 14);  // missing islands
+    std::string mvt = buildTile(world, ocean, id);
+  }
+  {
+    TileID id(2609, 6334, 14);  // all ocean
+    std::string mvt = buildTile(world, ocean, id);
+  }
+
+  // while(id.z > 9) {
+  //   std::string mvt = buildTile(world, id);
+  //   id = id.getParent();
+  // }
+
+  return 0;
+}
+#endif
