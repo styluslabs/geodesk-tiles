@@ -61,8 +61,11 @@ else
 endif
 
 MODULE_INC_PRIVATE = \
-  deps/vtzero/include \
-  deps/protozero/include
+  sqlite3 \
+  miniz \
+  cpp-httplib \
+  vtzero/include \
+  protozero/include
 
 #MODULE_DEFS_PRIVATE = PUGIXML_NO_XPATH PUGIXML_NO_EXCEPTIONS SVGGUI_NO_SDL
 

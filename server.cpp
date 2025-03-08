@@ -5,10 +5,7 @@
 #define SQLITEPP_LOGE LOG
 #define SQLITEPP_LOGW LOG
 #include "sqlitepp.h"
-#include "ulib/threadutil.h"
-
-#define STRINGUTIL_IMPLEMENTATION
-#include "ulib/stringutil.h"
+#include "ulib.h"
 
 // httplib should be last include because it pulls in, e.g., fcntl.h with #defines that break geodesk headers
 //#define CPPHTTPLIB_OPENSSL_SUPPORT
@@ -76,7 +73,7 @@ int main(int argc, char* argv[])
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
     auto t1 = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(t1 - time0).count();
-    auto statstr = fstring("Uptime: %.0f s\nReqs: %llu\n200 Reqs: %llu\nBytes out: %llu\n",
+    auto statstr = std::format("Uptime: {:.0f} s\nReqs: {}\n200 Reqs: {}\nBytes out: {}\n",
         dt, stats.reqs.load(), stats.reqsok.load(), stats.bytesout.load());
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
