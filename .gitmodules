@@ -1,0 +1,9 @@
+[submodule "cpp-httplib"]
+	path = cpp-httplib
+	url = https://github.com/yhirose/cpp-httplib
+[submodule "protozero"]
+	path = protozero
+	url = https://github.com/mapbox/protozero
+[submodule "vtzero"]
+	path = vtzero
+	url = https://github.com/mapbox/vtzero
