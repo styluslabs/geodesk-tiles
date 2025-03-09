@@ -36,7 +36,7 @@ std::string buildTile(const Features& world, const Features& ocean, TileID id)
   }
   catch(std::exception &e) {
     int64_t fid = tileBuilder.m_feat ? tileBuilder.feature().id() : -1;
-    LOG("Exception building tile %s (feature id %lld): %s", id.toString().c_str(), fid, e.what());
+    LOG("Exception building tile %s (feature id %ld): %s", id.toString().c_str(), fid, e.what());
     return "";
   }
 }
@@ -818,7 +818,6 @@ int main(int argc, char* argv[])
   }
   {
     TileID id(2615, 6329, 14);
-    int ydb = (1 << id.z) - 1 - id.y;
     std::string mvt = buildTile(world, ocean, id);
   }
   {

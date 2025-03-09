@@ -1,5 +1,8 @@
-old/
+/build/
+/sqlite3/
+/old/
 
 *.gol
 *.pbf
 *.mbtile*
+callgrind.out.*

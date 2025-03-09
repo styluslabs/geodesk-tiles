@@ -55,7 +55,7 @@ MODULE_SOURCES = \
   ascendtiles.cpp
 
 ifneq ($(SERVER), 0)
-  MODULE_SOURCES += scripts/server.cpp
+  MODULE_SOURCES += server.cpp
 else
   DEFS += ASCENDTILES_MAIN
 endif

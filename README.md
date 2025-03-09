@@ -7,7 +7,7 @@ Combine [libgeodesk](https://github.com/clarisma/libgeodesk) and [vtzero](https:
 
 On Linux, `git clone --recurse-submodules https://github.com/styluslabs/geodesk-tiles`, then `make` to create `build/Release/server`, then run `server <OSM GOL file> <ocean polygons GOL file> [<mbtiles cache>]` to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}` (`iptables` can be used to redirect port 80 to 8080).
 
-The GOL files can be created with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build) from OSM pbf files.
+The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build).
 
 To create a pbf for ocean polygons, simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html can be converted with [ogr2osm](https://github.com/roelderickx/ogr2osm).  These are used for determining whether tiles without any coastline ways are ocean or land.
 
@@ -31,9 +31,9 @@ Coastline ways (`natural=coastline`) should be passed to `addCoastline()` instea
 
 ## Details ##
 
-[server.cpp] uses [cpp-httplib](https://github.com/yhirose/cpp-httplib) with sqlite to save generated tiles to an mbtiles file.
+[server.cpp](server.cpp) uses [cpp-httplib](https://github.com/yhirose/cpp-httplib) to provide an HTTP server and sqlite to save generated tiles to an mbtiles file.
 
-Simple Cohen–Sutherland line clipping is used ([clipper.h]); more robust clipping for edge cases should be added in the future.
+Simple Cohen–Sutherland line clipping is used in [clipper.h](clipper.h); more robust clipping for edge cases should be added in the future.
 
 
 ## Performance ##

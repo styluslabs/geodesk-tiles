@@ -65,7 +65,7 @@ int main(int argc, char* argv[])
   auto time0 = std::chrono::steady_clock::now();
 
   sqlite3_config(SQLITE_CONFIG_MULTITHREAD);  // should be OK since our DB object is declared thread_local
-  if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) {  //SQLITE_OPEN_READONLY
+  if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) {
     LOG("Error opening world mbtiles %s\n", worldDBPath);
     return -1;
   }
@@ -90,14 +90,11 @@ int main(int argc, char* argv[])
     int z = std::strtol(zstr, &zout, 10);
     int x = std::strtol(xstr, &xout, 10);
     int y = std::strtol(ystr, &yout, 10);
-    if(zout == zstr || xout == xstr || ystr == yout ||
-        z < 0 || x < 0 || y < 0 || x >= (1 << z) || y >= (1 << z)) {
+    TileID id(x, y, z);
+    if(zout == zstr || xout == xstr || ystr == yout || !id.isValid()) {
       return httplib::StatusCode::BadRequest_400;
     }
-
     if(z > 14) { return httplib::StatusCode::NotFound_404; }
-
-    TileID id(x, y, z);
 
     if(!worldDB.db) {
       if(worldDB.open(worldDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
@@ -156,7 +153,11 @@ int main(int argc, char* argv[])
     LOGD("Serving %s\n", req.path.c_str());
     ++stats.reqsok;
     stats.bytesout += res.body.size();
-    res.set_header("Content-Encoding", "gzip");
+    // client can set X-Hide-Encoding header to suppress Content-Encoding: gzip so client's network stack
+    //  doesn't unzip tile (only to have it recompressed when saving to client's mbtiles cache)
+    if(!req.has_header("X-Hide-Encoding")) {
+      res.set_header("Content-Encoding", "gzip");
+    }
     return httplib::StatusCode::OK_200;
   });
 

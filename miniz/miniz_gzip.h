@@ -374,7 +374,7 @@ int main(int argc, char* argv[])
 #endif //MINIZ_GZ_UTIL
 
 // To build test executable (replace .. with path to directory containing miniz/ as needed)
-//   g++ -march=native -O3 -DMINIZ_GZ_TEST -DMINIZ_GZ_IMPLEMENTATION -isystem .. -o gztest -x c++ miniz_gzip.h
+//   g++ -march=native -O3 -DMINIZ_GZ_TEST -DMINIZ_GZ_IMPLEMENTATION -isystem .. -o gztest -x c++ miniz_gzip.h ../miniz/miniz.c ../miniz/miniz_tdef.c ../miniz/miniz_tinfl.c
 #ifdef MINIZ_GZ_TEST
 #include <sstream>
 #include <fstream>
@@ -383,10 +383,6 @@ int main(int argc, char* argv[])
 #include <assert.h>
 #define ASSERT assert
 #endif
-
-#include "miniz/miniz.c"
-#include "miniz/miniz_tdef.c"
-#include "miniz/miniz_tinfl.c"
 
 // test string needs to be over ~32KB to provide a good test!
 
