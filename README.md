@@ -9,9 +9,9 @@ On Linux, `git clone --recurse-submodules https://github.com/styluslabs/geodesk-
 
 The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build).
 
-To create a pbf for ocean polygons, simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html can be converted with [ogr2osm](https://github.com/roelderickx/ogr2osm).  These are used for determining whether tiles without any coastline ways are ocean or land.
+To create a pbf for ocean polygons, simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html can be converted with [ogr2osm](https://github.com/roelderickx/ogr2osm).  These are used for determining whether tiles without any coastline ways are ocean or land.  A prebuilt oceans GOL file is available in [releases](https://github.com/styluslabs/geodesk-tiles/releases/tag/tag-for-assets).
 
-An initial mbtiles file with low zoom tiles can be provided to avoid having to generate these.
+An initial mbtiles file such as [this](https://github.com/styluslabs/maps/releases/download/alpha-1/basemap7.mbtiles) with low zoom tiles can be provided to avoid having to generate these (which is not tested).
 
 
 ## Schema ##
