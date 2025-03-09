@@ -3,8 +3,8 @@
 #include "tilebuilder.h"
 
 #include <string>
-#include <set>
-#include <map>
+#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 
@@ -43,8 +43,10 @@ std::string buildTile(const Features& world, const Features& ocean, TileID id)
 
 // AscendTileBuilder impl
 
+// we could try something like github.com/serge-sans-paille/frozen or github.com/renzibei/fph-table for
+//  the set/map here, but at this point, tag lookup is only a small part of CPU time
 struct Set {
-  std::set<std::string> m_items;
+  std::unordered_set<std::string> m_items;
   Set(std::initializer_list<std::string> items) : m_items(items) {}
 
   bool operator[](const std::string& key) const { return !key.empty() && m_items.find(key) != m_items.end(); }
@@ -52,7 +54,7 @@ struct Set {
 };
 
 struct ZMap {
-  using map_t = std::map<std::string, int>;
+  using map_t = std::unordered_map<std::string, int>;
   std::string m_tag;
   mutable CodedString m_tagCode = {{}, INT_MAX};
   map_t m_items;
@@ -177,24 +179,32 @@ void AscendTileBuilder::ProcessNode()
   }
 }
 
-//static const auto majorRoadValues = Set { "motorway", "trunk", "primary" };
-//static const auto mainRoadValues  = Set { "secondary", "motorway_link", "trunk_link", "primary_link", "secondary_link" };
-//static const auto midRoadValues   = Set { "tertiary", "tertiary_link" };
-static const auto minorRoadValues = Set { "unclassified", "residential", "road", "living_street" };
-static const auto trackValues     = Set { "cycleway", "byway", "bridleway", "track" };
-static const auto pathValues      = Set { "footway", "path", "steps", "pedestrian" };
-static const auto linkValues      = Set { "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link" };
-//static const auto constructionValues = Set { "primary", "secondary", "tertiary", "motorway", "service", "trunk", "track" };
+// default zoom for including labels is 14; use | <zoom>_z to override
+constexpr unsigned long long operator""_z(unsigned long long z) { return z << 8; }
+static const ZMap highwayValues = {
+    {"motorway", 4|8_z}, {"trunk", 5|8_z}, {"primary", 7|12_z}, {"secondary", 9|12_z}, {"tertiary", 11|12_z},
+    {"unclassified", 12}, {"residential", 12}, {"road", 12}, {"living_street", 12}, {"service", 12}, // minor roads
+    {"cycleway", 10}, {"byway", 10}, {"bridleway", 10}, {"track", 10},  // tracks (was z14)
+    {"footway", 10}, {"path", 10}, {"steps", 10}, {"pedestrian", 10},  // paths (was z14)
+    {"motorway_link", -11}, {"trunk_link", -11}, {"primary_link", -11}, {"secondary_link", -11},
+    {"tertiary_link", -11}  // link roads (on/off ramps)
+};
 
-static const auto pavedValues = Set { "paved", "asphalt", "cobblestone", "concrete", "concrete:lanes", "concrete:plates", "metal", "paving_stones", "sett", "unhewn_cobblestone", "wood" };
-static const auto unpavedValues = Set { "unpaved", "compacted", "dirt", "earth", "fine_gravel", "grass", "grass_paver", "gravel", "gravel_turf", "ground", "ice", "mud", "pebblestone", "salt", "sand", "snow", "woodchips" };
+static const auto pavedValues = Set { "paved", "asphalt", "cobblestone", "concrete", "concrete:lanes",
+    "concrete:plates", "metal", "paving_stones", "sett", "unhewn_cobblestone", "wood" };
+static const auto unpavedValues = Set { "unpaved", "compacted", "dirt", "earth", "fine_gravel", "grass",
+    "grass_paver", "gravel", "gravel_turf", "ground", "ice", "mud", "pebblestone", "salt", "sand", "snow", "woodchips" };
 
 static const auto boundaryValues = Set { "administrative", "disputed" };
 static const auto parkValues = Set { "protected_area", "national_park" };
-static const auto landuseAreas = Set { "retail", "military", "residential", "commercial", "industrial", "railway", "cemetery", "forest", "grass", "allotments", "meadow", "recreation_ground", "village_green", "landfill", "farmland", "farmyard", "orchard", "vineyard", "plant_nursery", "greenhouse_horticulture", "farm" };
-static const auto naturalAreas = Set { "wood", "grassland", "grass", "scrub", "fell", "heath", "wetland", "glacier", "beach", "sand", "bare_rock", "scree" };
+static const auto landuseAreas = Set { "retail", "military", "residential", "commercial", "industrial",
+    "railway", "cemetery", "forest", "grass", "allotments", "meadow", "recreation_ground", "village_green",
+    "landfill", "farmland", "farmyard", "orchard", "vineyard", "plant_nursery", "greenhouse_horticulture", "farm" };
+static const auto naturalAreas = Set { "wood", "grassland", "grass", "scrub", "fell", "heath", "wetland",
+    "glacier", "beach", "sand", "bare_rock", "scree" };
 static const auto leisureAreas = Set { "pitch", "park", "garden", "playground", "golf_course", "stadium" };
-static const auto amenityAreas = Set { "school", "university", "kindergarten", "college", "library", "hospital", "bus_station", "marketplace" };
+static const auto amenityAreas = Set { "school", "university", "kindergarten", "college", "library",
+    "hospital", "bus_station", "marketplace" };
 static const auto tourismAreas = Set { "zoo", "theme_park", "aquarium" };
 
 static const auto waterwayClasses = Set { "stream", "river", "canal", "drain", "ditch" };
@@ -288,27 +298,19 @@ void AscendTileBuilder::ProcessWay()
   }
 
   //if (Find("disused") == "yes") { return; } -- not commonly used
-
   // Roads/paths/trails - 2nd most common way type
   auto highway_tag = Find("highway");
   if (highway_tag) {
     std::string highway = highway_tag;
-    int minzoom = 99, lblzoom = 99;
-    bool ramp = false;
-    //if (majorRoadValues[highway]) { minzoom = 4; }
-    if (highway == "motorway"        ) { minzoom = 4;  lblzoom = 8; }
-    else if (highway == "trunk"      ) { minzoom = 5;  lblzoom = 8; }
-    else if (highway == "primary"    ) { minzoom = 7;  lblzoom = 12; }
-    else if (highway == "secondary"  ) { minzoom = 9;  lblzoom = 12; }  //mainRoadValues[highway]
-    else if (highway == "tertiary"   ) { minzoom = 11; lblzoom = 12; }  //midRoadValues[highway]
-    else if (minorRoadValues[highway]) { minzoom = 12; lblzoom = 14; }
-    else if (trackValues[highway]    ) { minzoom = 10; lblzoom = 14; }  // was 14
-    else if (pathValues[highway]     ) { minzoom = 10; lblzoom = 14; }  // was 14
-    else if (highway == "service"    ) { minzoom = 12; lblzoom = 14; }
-    else if (linkValues[highway]     ) {
+    int minzoom = highwayValues[highway];
+    bool ramp = minzoom < 0;
+    if(ramp) {
       highway = highway.substr(0, highway.find("_"));
-      ramp = true; minzoom = 11; lblzoom = 14;
+      minzoom = -minzoom;
     }
+    int lblzoom = (minzoom >> 8) ? (minzoom >> 8) : 14;
+    minzoom = minzoom & 0xFF;
+
     //if (highway == "proposed" || highway == "construction") { return; }  -- will fail MinZoom test anyway
     // Construction -- not used currently
     //auto construction = Find("construction");
@@ -323,7 +325,7 @@ void AscendTileBuilder::ProcessWay()
     if (access == "private" || access == "no") { return; }
     // most footways are sidewalks or crossings, which are mapped inconsistently so just add clutter and
     //  confusion the map; we could consider keeping footway == "alley"
-    if (highway == "footway" && Find("footway") != "") { return; }
+    if (highway == "footway" && Find("footway")) { return; }
 
     Layer("transportation", false);
     //Attribute("class", h);
@@ -783,57 +785,3 @@ void AscendTileBuilder::WriteBoundary()
     }
   }
 }
-
-// testing
-
-#ifdef ASCENDTILES_MAIN
-int main(int argc, char* argv[])
-{
-  if(argc < 3) {
-    LOG("No gol file specified!");
-    return -1;
-  }
-
-  Features world(argv[1]);
-  Features ocean(argv[2]);
-  LOG("Loaded %s and %s", argv[1], argv[2]);
-
-  TileBuilder::worldFeats = &world;
-
-  // for(int x = 2616; x <= 2621; ++x) {
-  //   for(int y = 6331; y <= 6336; ++y) {
-  //     TileID id(x, y, 14);
-  //     std::string mvt = buildTile(world, id);
-  //   }
-  // }
-
-  {
-    TileID id(2617, 6332, 14);  // Alamo square!
-    while(id.z > 9) {
-      std::string mvt = buildTile(world, ocean, id);
-      id = id.getParent();
-    }
-    //std::string mvt = buildTile(world, ocean, id);
-    return 0;
-  }
-  {
-    TileID id(2615, 6329, 14);
-    std::string mvt = buildTile(world, ocean, id);
-  }
-  {
-    TileID id(2612, 6327, 14);  // missing islands
-    std::string mvt = buildTile(world, ocean, id);
-  }
-  {
-    TileID id(2609, 6334, 14);  // all ocean
-    std::string mvt = buildTile(world, ocean, id);
-  }
-
-  // while(id.z > 9) {
-  //   std::string mvt = buildTile(world, id);
-  //   id = id.getParent();
-  // }
-
-  return 0;
-}
-#endif

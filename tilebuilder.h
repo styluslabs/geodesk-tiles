@@ -23,6 +23,7 @@ struct CodedString {
   int code;
 };
 
+// can't think of a way to do this (w/o separate list of tag strings) w/o using macro
 #define Find(s) readTag( []() -> const CodedString& { static CodedString cs = TileBuilder::getCodedString(s); return cs; }() )
 #define Holds(s) bool(Find(s))
 
@@ -78,6 +79,9 @@ public:
 
   // writing tile feature
   bool MinZoom(int z) { return m_id.z >= z; }
+  void Attribute(const std::string& key, const TagValue& val) {
+    if(val) { m_build->add_property(key, std::string(val)); }
+  }
   void Attribute(const std::string& key, const std::string& val) {
     if(!val.empty()) { m_build->add_property(key, val); }  //&& m_id.z >= z
   }

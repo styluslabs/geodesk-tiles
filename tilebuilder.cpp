@@ -21,7 +21,7 @@ CodedString TileBuilder::getCodedString(std::string_view s)
 TileBuilder::TileBuilder(TileID _id, const std::vector<std::string>& layers) : m_id(_id)
 {
   for(auto& l : layers)
-    m_layers.emplace(l, vtzero::layer_builder{m_tile, l, 2, tileExtent});  // MVT v2
+    m_layers.emplace(l, vtzero::layer_builder{m_tile, l, 2, uint32_t(tileExtent)});  // MVT v2
 
   double units = Mercator::MAP_WIDTH/MapProjection::EARTH_CIRCUMFERENCE_METERS;
   m_origin = units*MapProjection::tileSouthWestCorner(m_id);

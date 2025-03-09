@@ -1,8 +1,15 @@
 # Linux makefile for Ascend Maps tile server
 
-TARGET ?= server
-DEBUG ?= 0
 SERVER ?= 1
+ifneq ($(SERVER), 0)
+  TARGET = server
+  MAIN_SOURCE = server.cpp
+else
+  TARGET = tiletest
+  MAIN_SOURCE = tiletest.cpp
+endif
+
+DEBUG ?= 0
 ifneq ($(DEBUG), 0)
   BUILDDIR ?= build/Debug
 else
@@ -52,13 +59,8 @@ MODULE_BASE := .
 MODULE_SOURCES = \
   miniz/miniz.c \
   tilebuilder.cpp \
-  ascendtiles.cpp
-
-ifneq ($(SERVER), 0)
-  MODULE_SOURCES += server.cpp
-else
-  DEFS += ASCENDTILES_MAIN
-endif
+  ascendtiles.cpp \
+  $(MAIN_SOURCE)
 
 MODULE_INC_PRIVATE = \
   . \

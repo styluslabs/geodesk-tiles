@@ -5,7 +5,7 @@ Combine [libgeodesk](https://github.com/clarisma/libgeodesk) and [vtzero](https:
 
 ## Usage ##
 
-On Linux, `git clone --recurse-submodules https://github.com/styluslabs/geodesk-tiles`, then `make` to create `build/Release/server`, then run `server <OSM GOL file> <ocean polygons GOL file> [<mbtiles cache>]` to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}` (`iptables` can be used to redirect port 80 to 8080).
+On Linux, `git clone https://github.com/styluslabs/geodesk-tiles`, `git submodule update --init`, then `make` to create `build/Release/server`, then run `server <OSM GOL file> <ocean polygons GOL file> [<mbtiles cache>]` to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}` (`iptables` can be used to redirect port 80 to 8080).
 
 The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build).
 
