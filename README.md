@@ -5,13 +5,13 @@ Combine [libgeodesk](https://github.com/clarisma/libgeodesk) and [vtzero](https:
 
 ## Usage ##
 
-On Linux, `git clone https://github.com/styluslabs/geodesk-tiles`, `git submodule update --init`, then `make` to create `build/Release/server`, then run `server <OSM GOL file> <ocean polygons GOL file> [<mbtiles cache>]` to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}` (`iptables` can be used to redirect port 80 to 8080).
+On Linux, `git clone https://github.com/styluslabs/geodesk-tiles`, `git submodule update --init`, then `make` to create `build/Release/server`, then run `server <OSM GOL file> <ocean polygons GOL file>  to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}`.  The TCP port can be set with the `--port` option or `iptables` can be used to redirect port 80 to 8080 (so server needs no special permissions).
 
 The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build).
 
 To create a pbf for ocean polygons, simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html can be converted with [ogr2osm](https://github.com/roelderickx/ogr2osm).  These are used for determining whether tiles without any coastline ways are ocean or land.  A prebuilt oceans GOL file is available in [releases](https://github.com/styluslabs/geodesk-tiles/releases/tag/tag-for-assets).
 
-An initial mbtiles file such as [this](https://github.com/styluslabs/maps/releases/download/alpha-1/basemap7.mbtiles) with low zoom tiles can be provided to avoid having to generate these (which is not tested).
+An initial mbtiles file such as [this](https://github.com/styluslabs/maps/releases/download/alpha-1/basemap7.mbtiles) with low zoom tiles can be provided with the `--db` option to avoid having to generate these (which is not tested).
 
 
 ## Schema ##

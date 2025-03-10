@@ -15,6 +15,13 @@
 
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
+// WAL allows simultaneous reading and writing
+static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
+BEGIN;
+  CREATE TABLE IF NOT EXISTS tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
+  CREATE UNIQUE INDEX IF NOT EXISTS tile_index on tiles (zoom_level, tile_column, tile_row);
+COMMIT;)";
+
 static const char* getTileSQL =
     "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?;";
 static const char* putTileSQL =
@@ -29,6 +36,14 @@ public:
 
 thread_local TileDB worldDB;
 
+static void sigint_handler(int s)
+{
+  LOG("SIGINT received, exiting");
+  // exit() destroys static objects, so sqlite WAL should be flushed and removed
+  // ... but only thread_locals on current thread are destroyed - seems to work but watch out for this
+  exit(1);
+}
+
 // Building ocean.gol (used to determine if empty tiles are ocean or land):
 // - download simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html
 //  - note: built with https://github.com/osmcode/osmcoastline
@@ -40,29 +55,58 @@ thread_local TileDB worldDB;
 int main(int argc, char* argv[])
 {
   struct Stats_t { std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0; } stats;
-  const char* worldDBPath = argc > 3 ? argv[3] : "planet.mbtiles";
-  // WAL allows simultaneous reading and writing
-  static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
-  BEGIN;
-    CREATE TABLE IF NOT EXISTS tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
-    CREATE UNIQUE INDEX IF NOT EXISTS tile_index on tiles (zoom_level, tile_column, tile_row);
-  COMMIT;)";
 
-  if(argc < 3) {
-    LOG("Usage: server <OSM gol file> <Ocean gol file> [<MBTiles file>]");
+  std::signal(SIGINT, sigint_handler);
+
+  // defaults
+  const char* worldDBPath = "planet.mbtiles";
+  int tcpPort = 8080;
+  int numBuildThreads = std::max(2U, std::thread::hardware_concurrency()) - 1;
+  TileID topTile(-1, -1, -1);
+  int maxZ = 14;
+
+  int argi = 1;
+  for(; argi < argc-1; argi += 2) {
+    if(strcmp(argv[argi], "--port") == 0)
+      tcpPort = atoi(argv[argi+1]);
+    else if(strcmp(argv[argi], "--threads") == 0)
+      numBuildThreads = std::max(1, atoi(argv[argi+1]));
+    else if(strcmp(argv[argi], "--db") == 0)
+      worldDBPath = argv[argi+1];
+    else if(strcmp(argv[argi], "--build") == 0) {
+      sscanf(argv[argi+1], "%hhd/%d/%d", &topTile.z, &topTile.x, &topTile.y);
+      if(!topTile.isValid()) {
+        LOG("Tile id %s is invalid (expected WMTS z/x/y)", argv[argi+1]);
+        return -1;
+      }
+    }
+    else if(strcmp(argv[argi], "--maxz") == 0)
+      maxZ = atoi(argv[argi+1]);
+    else
+      break;
+  }
+
+  if(argi + 2 != argc) {
+    LOG(R"(Usage: server [options] <OSM gol file> <Ocean gol file>
+Optional arguments:
+  --db <mbtiles file>: sqlite file to store generated tiles; default is planet.mbtiles
+  --port <port number>: TCP port to listen on; default is 8080
+  --threads <n>: number of tile builder threads; default is CPU cores - 1
+  --build <z>/<x>/<y>: build tile z/x/y and all children to maxz, then exit (no server)
+  --maxz <z>: maximum tile zoom level; default is 14
+)");
     return -1;
   }
-  Features worldGOL(argv[1]);
-  Features oceanGOL(argv[2]);
-  LOG("Loaded %s and %s", argv[1], argv[2]);
+
+  Features worldGOL(argv[argi]);
+  Features oceanGOL(argv[argi+1]);
+  LOG("Loaded %s and %s", argv[argi], argv[argi+1]);
 
   TileBuilder::worldFeats = &worldGOL;
   // ... separate queues for high zoom and low zoom (slower build)?
   std::mutex buildMutex;
   std::map< TileID, std::shared_future<std::string> > buildQueue;
-  ThreadPool buildWorkers(1);  // ThreadPool(1) is like AsyncWorker
-  httplib::Server svr;  //httplib::SSLServer svr;
-  auto time0 = std::chrono::steady_clock::now();
+  ThreadPool buildWorkers(numBuildThreads);  // ThreadPool(1) is like AsyncWorker
 
   sqlite3_config(SQLITE_CONFIG_MULTITHREAD);  // should be OK since our DB object is declared thread_local
   if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) {
@@ -70,6 +114,37 @@ int main(int argc, char* argv[])
     return -1;
   }
   worldDB.exec(schemaSQL);
+
+  if(topTile.isValid()) {
+    auto buildFn = [&](auto&& self, TileID id){
+      if(!worldDB.db) {
+        if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE) != SQLITE_OK) {
+          LOG("Error opening DB on tile builder thread!");
+          return;
+        }
+        worldDB.putTile = worldDB.stmt(putTileSQL);
+      }
+      LOG("Building %s", id.toString().c_str());
+      std::string mvt = buildTile(worldGOL, oceanGOL, id);
+      if(!mvt.empty()) {
+        worldDB.putTile.bind(id.z, id.x, id.yTMS());
+        sqlite3_bind_blob(worldDB.putTile.stmt, 4, mvt.data(), mvt.size(), SQLITE_STATIC);
+        if(!worldDB.putTile.exec())
+          LOG("Error adding tile %s to DB: %s", id.toString().c_str(), worldDB.errMsg());
+      }
+      if(id.z < maxZ) {
+        for(int ii = 0; ii < 4; ++ii)
+          self(self, id.getChild(ii, maxZ));
+      }
+    };
+    buildFn(buildFn, topTile);
+    buildWorkers.waitForIdle();
+    LOG("Finished building tiles");
+    return 0;
+  }
+
+  httplib::Server svr;  //httplib::SSLServer svr;
+  auto time0 = std::chrono::steady_clock::now();
 
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
     auto t1 = std::chrono::steady_clock::now();
@@ -94,7 +169,7 @@ int main(int argc, char* argv[])
     if(zout == zstr || xout == xstr || ystr == yout || !id.isValid()) {
       return httplib::StatusCode::BadRequest_400;
     }
-    if(z > 14) { return httplib::StatusCode::NotFound_404; }
+    if(z > maxZ) { return httplib::StatusCode::NotFound_404; }
 
     if(!worldDB.db) {
       if(worldDB.open(worldDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
@@ -161,7 +236,7 @@ int main(int argc, char* argv[])
     return httplib::StatusCode::OK_200;
   });
 
-  LOG("Server listening on 8080");
-  svr.listen("0.0.0.0", 8080);
+  LOG("Server listening on %d", tcpPort);
+  svr.listen("0.0.0.0", tcpPort);
   return 0;
 }

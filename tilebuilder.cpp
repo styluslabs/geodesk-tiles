@@ -7,6 +7,11 @@
 #include "miniz/miniz_gzip.h"
 
 // TileBuilder
+// Refs:
+// - https://github.com/mapbox/vector-tile-spec
+// - https://github.com/mapbox/mbtiles-spec
+// - https://github.com/onthegomap/planetiler / https://github.com/openmaptiles/planetiler-openmaptiles
+// - https://github.com/systemed/tilemaker - tile_worker.cpp, etc.
 
 using namespace geodesk;
 
@@ -32,7 +37,6 @@ TileBuilder::TileBuilder(TileID _id, const std::vector<std::string>& layers) : m
 
 static LngLat tileCoordToLngLat(const TileID& tileId, glm::dvec2 tileCoord)
 {
-  //using namespace Tangram;
   double scale = MapProjection::metersPerTileAtZoom(tileId.z);
   ProjectedMeters tileOrigin = MapProjection::tileSouthWestCorner(tileId);
   ProjectedMeters meters = tileCoord * scale + tileOrigin;

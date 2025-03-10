@@ -23,8 +23,8 @@ public:
   bool SetMinZoomByArea(double area = 0);
   void SetBrunnelAttributes();
   void SetEleAttributes();
-  void SetNameAttributes(Feature& feat, int minz = 0);
-  void SetNameAttributes(int minz = 0) { SetNameAttributes(feature(), minz); }
+  void SetNameAttributes(int minz = 0);
+  void SetIdAttributes();
   bool NewWritePOI(double area = 0, bool force = false);
 };
 
@@ -74,11 +74,13 @@ struct ZMap {
     return m_tagCode;
   }
 
-  int operator[](const std::string& key) const {
-    if (key.empty()) { return m_dflt; }
+  int getValue(const std::string& key) const {
     auto it = m_items.find(key);
     return it != m_items.end() ? it->second : m_dflt;
   }
+
+  int operator[](const std::string& key) const { return !key.empty() ? getValue(key) : m_dflt; }
+  int operator[](const TagValue& key) const { return key ? getValue(key) : m_dflt; }
 };
 
 
@@ -107,15 +109,14 @@ static const auto aerodromeValues = Set { "international", "public", "regional",
 void AscendTileBuilder::ProcessNode()
 {
   // Write 'place'
-  // note that OpenMapTiles has a rank for countries (1-3);, states (1-6) and cities (1-10+);
-  //   we could potentially approximate it for cities based on the population tag
   auto place = Find("place");
   if (place) {  // != "") {
-    int mz = 13, rank = 0;
-    double pop = Find("population");  //.c_str());
+    int mz = 13;
+    auto pop_tag = Find("population");
+    double pop = pop_tag ? double(pop_tag) : 0;
 
     if (place == "continent"   ) { mz = 0; }
-    else if (place == "country") { rank = mz = 3 - (pop > 50E6) - (pop > 20E6); }
+    else if (place == "country") { mz = 3 - (pop > 50E6) - (pop > 20E6); }
     else if (place == "state"  ) { mz = 4; }
     else if (place == "city"   ) { mz = 5; }
     else if (place == "town"   ) { mz = pop > 8000 ? 7 : 8; }
@@ -131,13 +132,14 @@ void AscendTileBuilder::ProcessNode()
     Layer("place", false);
     Attribute("class", place);
     Attribute("place", place);
-    if (rank > 0) { AttributeNumeric("rank", rank); }
+    //if (rank > 0) { AttributeNumeric("rank", rank); }
     if (pop > 0) { AttributeNumeric("population", pop); }
-    double sqkm = Find("sqkm");  //.c_str());
-    if (sqkm > 0) { AttributeNumeric("sqkm", sqkm); }
+    auto sqkm = Find("sqkm");
+    if (sqkm) { AttributeNumeric("sqkm", double(sqkm)); }
     if (place == "country") { Attribute("iso_a2", Find("ISO3166-1:alpha2")); }
     Attribute("place_CN", Find("place:CN"));
     SetNameAttributes();
+    SetIdAttributes();
     return;
   }
 
@@ -166,6 +168,7 @@ void AscendTileBuilder::ProcessNode()
     if (!MinZoom(11)) { return; }
     Layer("poi", false);
     SetNameAttributes();
+    SetIdAttributes();
     SetEleAttributes();
     Attribute("natural", natural);
     return;
@@ -246,8 +249,7 @@ void AscendTileBuilder::ProcessRelation()
     Attribute("ref", Find("ref"));
     Attribute("network", Find("network"));
     Attribute("color", Find("colour"));  // note spelling
-    Attribute("osm_id", Id());
-    Attribute("osm_type", "relation");
+    SetIdAttributes();
     return;
   }
   if (reltype == "boundary") {
@@ -277,6 +279,7 @@ void AscendTileBuilder::ProcessRelation()
     Attribute("leisure", leisure);
     Attribute("protect_class", protect_class);
     SetNameAttributes();
+    SetIdAttributes();
     AttributeNumeric("area", area);
   }
 }
@@ -637,6 +640,7 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
     if (bool(val) && (force12 || MinZoom(z[val]))) {
       LayerAsCentroid("poi");
       SetNameAttributes();
+      SetIdAttributes();
       if (area > 0) { AttributeNumeric("area", area); }
       // write value for all tags in poiTags (if present)
       for(const ZMap& y : poiTags) { Attribute(y.tag(), readTag(y.tagCode())); }
@@ -647,6 +651,7 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
   if (force && Holds("name")) {
     LayerAsCentroid("poi");
     SetNameAttributes();
+    SetIdAttributes();
     if (area > 0) { AttributeNumeric("area", area); }
   }
   return false;
@@ -654,28 +659,32 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
 
 // Common functions
 
-void AscendTileBuilder::SetNameAttributes(Feature& feat, int minz)
+void AscendTileBuilder::SetNameAttributes(int minz)
 {
   if (!MinZoom(minz)) { return; }
-  std::string name = feat["name"];
+  auto name = Find("name");
   Attribute("name", name);
-  std::string name_en = feat["name:en"];  // force std::string because == not impl yet for TagValue
-  if(name_en != "" && name_en != name) {
-    Attribute("name_en", name_en);
+  auto name_en_tag = Find("name:en");
+  if (name_en_tag) {
+    std::string name_en = name_en_tag;  // = not impl yet for TagValue
+    if(name != name_en) { Attribute("name_en", name_en); }
   }
-  // add OSM id
-  std::string osm_type = feat.isWay() ? "way" : feat.isNode() ? "node" : "relation";
-  Attribute("osm_id", std::to_string(feat.id()));
+}
+
+// previously we set id attributes whenever we set name attributes, but now we only set for poi, place, and
+//  transit layers; if we wanted to be able to get id for any feature in app, we'd want to set id
+//  attributes for all features (m_hasGeom == true), not just features with name.
+void AscendTileBuilder::SetIdAttributes()
+{
+  std::string osm_type = feature().isWay() ? "way" : feature().isNode() ? "node" : "relation";
+  Attribute("osm_id", Id());
   Attribute("osm_type", osm_type);
 }
 
 void AscendTileBuilder::SetEleAttributes()
 {
-  double ele = Find("ele");  //.c_str());
-  if (ele != 0) {
-    AttributeNumeric("ele", ele);
-    //AttributeNumeric("ele_ft", ele * 3.2808399);
-  }
+  auto ele = Find("ele");
+  if (ele) { AttributeNumeric("ele", float(double(ele))); }  //"ele_ft", ele * 3.2808399
 }
 
 void AscendTileBuilder::SetBrunnelAttributes()
@@ -715,32 +724,37 @@ bool AscendTileBuilder::SetMinZoomByArea(double area)
 
 void AscendTileBuilder::SetBuildingHeightAttributes()
 {
-  // The height of one floor, in meters
-  static constexpr double BUILDING_FLOOR_HEIGHT = 3.66;
+  static constexpr double BUILDING_FLOOR_HEIGHT = 3.66;  // meters
 
-  double height = Find("height");  //.c_str());
-  double minHeight = Find("min_height");  //.c_str());
-  double levels = Find("building:levels");  //.c_str());
-  double minLevel = Find("building:min_level");  //.c_str());
+  float height = 0, minHeight = 0;
 
-  double renderHeight = height > 0 ? height : (levels > 0 ? levels : 1) * BUILDING_FLOOR_HEIGHT;
-  double renderMinHeight = minHeight > 0 ? minHeight : (minLevel > 0 ? minLevel : 0) * BUILDING_FLOOR_HEIGHT;
-
-  // Fix upside-down buildings
-  if (renderHeight < renderMinHeight) {
-    renderHeight = renderHeight + renderMinHeight;
+  auto height_tag = Find("height");
+  if(height_tag) {
+    height = double(height_tag);
+    auto minHeight_tag = Find("min_height");
+    if(minHeight_tag)
+      minHeight = double(minHeight_tag);
+  }
+  else {
+    auto levels_tag = Find("building:levels");  //.c_str());
+    if(levels_tag) {
+      height = double(levels_tag) * BUILDING_FLOOR_HEIGHT;
+      auto minLevel_tag = Find("building:min_level");
+      if(minLevel_tag)
+        minHeight = double(minLevel_tag) * BUILDING_FLOOR_HEIGHT;
+    }
   }
 
-  AttributeNumeric("height", renderHeight);
-  AttributeNumeric("min_height", renderMinHeight);
-  // TODO: remove these
-  AttributeNumeric("render_height", renderHeight);
-  AttributeNumeric("render_min_height", renderMinHeight);
+  if (height < minHeight) { height += minHeight; }
+
+  if(height > 0) { AttributeNumeric("height", height); }
+  if(minHeight > 0) { AttributeNumeric("min_height", minHeight); }
 }
 
 void AscendTileBuilder::WriteBoundary()
 {
-  double admin_level = Find("admin_level");  //.c_str());
+  auto admin_level_tag = Find("admin_level");  //.c_str());
+  float admin_level = admin_level_tag ? double(admin_level_tag) : 11;
   if (admin_level < 1) { admin_level = 11; }
   int mz = 0;
   if (admin_level >= 3 && admin_level < 5) { mz=4; }

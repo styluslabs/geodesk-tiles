@@ -85,10 +85,8 @@ public:
   void Attribute(const std::string& key, const std::string& val) {
     if(!val.empty()) { m_build->add_property(key, val); }  //&& m_id.z >= z
   }
-  //void Attribute(const std::string& key, const TagValue& val, int z = 0) { Attribute(key, std::string(val), z); }
-  //void Attribute(const std::string& key) { Attribute(key, Find(key)); }
-  void AttributeNumeric(const std::string& key, double val) { m_build->add_property(key, val); }
-  //void ZOrder(float order) { /* Not supported - not needed since Tangram handles ordering */ }
+  template<class T>
+  void AttributeNumeric(const std::string& key, T val) { m_build->add_property(key, val); }
   void Layer(const std::string& layer, bool isClosed = false, bool _centroid = false);
   void LayerAsCentroid(const std::string& layer) { Layer(layer, false, true); }
 
