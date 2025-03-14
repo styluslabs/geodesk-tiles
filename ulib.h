@@ -17,6 +17,7 @@ public:
   ThreadPool(size_t nthreads);
   template<class F, class... Args>
   auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type>;
+  void requestStop(bool clear = false);
   void waitForIdle();
   ~ThreadPool();
 
@@ -86,14 +87,20 @@ inline void ThreadPool::waitForIdle()
   //notify_task_finish = false;
 }
 
-// the destructor joins all threads
-inline ThreadPool::~ThreadPool()
+inline void ThreadPool::requestStop(bool clear)
 {
   {
     std::unique_lock<std::mutex> lock(queue_mutex);
     stop = true;
+    if(clear) { tasks = {}; }
   }
   queue_cv.notify_all();
+}
+
+// the destructor joins all threads
+inline ThreadPool::~ThreadPool()
+{
+  requestStop(false);
   for(std::thread &worker: workers)
     worker.join();
 }

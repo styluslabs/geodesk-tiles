@@ -36,12 +36,17 @@ public:
 
 thread_local TileDB worldDB;
 
+// sigwait would be an alternative approach
+static std::function<void()> onSigInt;
 static void sigint_handler(int s)
 {
-  LOG("SIGINT received, exiting");
-  // exit() destroys static objects, so sqlite WAL should be flushed and removed
-  // ... but only thread_locals on current thread are destroyed - seems to work but watch out for this
-  exit(1);
+  if(onSigInt) {
+    LOG("SIGINT: requesting shutdown (again to force exit)");
+    onSigInt();
+    onSigInt = {};
+  }
+  else
+    exit(1);
 }
 
 // Building ocean.gol (used to determine if empty tiles are ocean or land):
@@ -74,7 +79,9 @@ int main(int argc, char* argv[])
     else if(strcmp(argv[argi], "--db") == 0)
       worldDBPath = argv[argi+1];
     else if(strcmp(argv[argi], "--build") == 0) {
-      sscanf(argv[argi+1], "%hhd/%d/%d", &topTile.z, &topTile.x, &topTile.y);
+      int x = -1, y = -1, z = -1;
+      sscanf(argv[argi+1], "%d/%d/%d", &z, &x, &y);
+      topTile = TileID(x, y, z);
       if(!topTile.isValid()) {
         LOG("Tile id %s is invalid (expected WMTS z/x/y)", argv[argi+1]);
         return -1;
@@ -106,45 +113,51 @@ Optional arguments:
   // ... separate queues for high zoom and low zoom (slower build)?
   std::mutex buildMutex;
   std::map< TileID, std::shared_future<std::string> > buildQueue;
-  ThreadPool buildWorkers(numBuildThreads);  // ThreadPool(1) is like AsyncWorker
+  ThreadPool buildWorkers(numBuildThreads);
+  ThreadPool dbWriter(1);  // ThreadPool(1) is like AsyncWorker
 
   sqlite3_config(SQLITE_CONFIG_MULTITHREAD);  // should be OK since our DB object is declared thread_local
-  if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) {
+  // have to serialize DB writes, so use a single worker thread
+  auto dbfut = dbWriter.enqueue([&](){
+    if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) { return false; }
+    if(!worldDB.exec(schemaSQL)) { return false; }
+    worldDB.putTile = worldDB.stmt(putTileSQL);
+    return true;
+  });
+  if(!dbfut.get()) {
     LOG("Error opening world mbtiles %s\n", worldDBPath);
     return -1;
   }
-  worldDB.exec(schemaSQL);
 
+  auto time0 = std::chrono::steady_clock::now();
   if(topTile.isValid()) {
-    auto buildFn = [&](auto&& self, TileID id){
-      if(!worldDB.db) {
-        if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE) != SQLITE_OK) {
-          LOG("Error opening DB on tile builder thread!");
-          return;
-        }
-        worldDB.putTile = worldDB.stmt(putTileSQL);
-      }
+    std::function<void(TileID)> buildFn = [&](TileID id){
       LOG("Building %s", id.toString().c_str());
+      ++stats.tilesbuilt;
       std::string mvt = buildTile(worldGOL, oceanGOL, id);
       if(!mvt.empty()) {
-        worldDB.putTile.bind(id.z, id.x, id.yTMS());
-        sqlite3_bind_blob(worldDB.putTile.stmt, 4, mvt.data(), mvt.size(), SQLITE_STATIC);
-        if(!worldDB.putTile.exec())
-          LOG("Error adding tile %s to DB: %s", id.toString().c_str(), worldDB.errMsg());
+        dbWriter.enqueue([&, mvt = std::move(mvt), id](){
+          worldDB.putTile.bind(id.z, id.x, id.yTMS());
+          sqlite3_bind_blob(worldDB.putTile.stmt, 4, mvt.data(), mvt.size(), SQLITE_STATIC);
+          if(!worldDB.putTile.exec())
+            LOG("Error adding tile %s to DB: %s", id.toString().c_str(), worldDB.errMsg());
+        });
       }
       if(id.z < maxZ) {
         for(int ii = 0; ii < 4; ++ii)
-          self(self, id.getChild(ii, maxZ));
+          buildWorkers.enqueue(buildFn, id.getChild(ii, maxZ));
       }
     };
-    buildFn(buildFn, topTile);
+    onSigInt = [&](){ buildWorkers.requestStop(true); };
+    buildWorkers.enqueue(buildFn, topTile);
     buildWorkers.waitForIdle();
-    LOG("Finished building tiles");
+    auto t1 = std::chrono::steady_clock::now();
+    double dt = std::chrono::duration<double>(t1 - time0).count();
+    LOG("Built %d tiles in %.0fs", int(stats.tilesbuilt.load()), dt);
     return 0;
   }
 
   httplib::Server svr;  //httplib::SSLServer svr;
-  auto time0 = std::chrono::steady_clock::now();
 
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
     auto t1 = std::chrono::steady_clock::now();
@@ -186,6 +199,7 @@ Optional arguments:
     });
     // small chance that we could repeat tile build, but don't want to keep mutex locked during DB query
     if(res.body.empty()) {
+      bool savetile = false;
       std::shared_future<std::string> fut;
       {
         std::lock_guard<std::mutex> lock(buildMutex);
@@ -195,33 +209,30 @@ Optional arguments:
           fut = it->second;
         }
         else {
-          fut = std::shared_future<std::string>(buildWorkers.enqueue([&, id](){
-            if(!worldDB.db) {
-              if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE) != SQLITE_OK) {
-                LOG("Error opening DB on tile builder thread!");
-                return std::string();
-              }
-              worldDB.putTile = worldDB.stmt(putTileSQL);
-            }
-            std::string mvt = buildTile(worldGOL, oceanGOL, id);
-            if(!mvt.empty()) {
-              worldDB.putTile.bind(id.z, id.x, id.yTMS());
-              sqlite3_bind_blob(worldDB.putTile.stmt, 4, mvt.data(), mvt.size(), SQLITE_STATIC);
-              if(!worldDB.putTile.exec())
-                LOG("Error adding tile %s to DB: %s", id.toString().c_str(), worldDB.errMsg());
-            }
-            { std::lock_guard<std::mutex> lock(buildMutex);  buildQueue.erase(id); }
-            return mvt;
-          }));
+          fut = buildWorkers.enqueue([&, id](){
+            return buildTile(worldGOL, oceanGOL, id);
+          });
           buildQueue.emplace(id, fut);
           ++stats.tilesbuilt;
+          savetile = true;
         }
       }
       if(fut.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
         return httplib::StatusCode::RequestTimeout_408;  // 504 would be more correct
       }
-      std::string mvt = fut.get();
+      const std::string& mvt = fut.get();
       if(mvt.empty()) { return httplib::StatusCode::NotFound_404; }
+      if(savetile) {
+        // note that capturing mvt by ref copies the ref (no such thing as ref to ref), so lifetime is
+        //  that of the shared_future holding the actual string (see C++20 standard 7.5.5.2 para. 13)
+        dbWriter.enqueue([&, id](){
+          worldDB.putTile.bind(id.z, id.x, id.yTMS());
+          sqlite3_bind_blob(worldDB.putTile.stmt, 4, mvt.data(), mvt.size(), SQLITE_STATIC);
+          if(!worldDB.putTile.exec())
+            LOG("Error adding tile %s to DB: %s", id.toString().c_str(), worldDB.errMsg());
+          { std::lock_guard<std::mutex> lock(buildMutex);  buildQueue.erase(id); }
+        });
+      }
       res.set_content(mvt.data(), mvt.size(), "application/vnd.mapbox-vector-tile");
     }
 
@@ -236,7 +247,9 @@ Optional arguments:
     return httplib::StatusCode::OK_200;
   });
 
-  LOG("Server listening on %d", tcpPort);
+  onSigInt = [&](){ svr.stop(); buildWorkers.requestStop(true); };
+  LOG("Server listening on port %d with %d tile threads", tcpPort, numBuildThreads);
   svr.listen("0.0.0.0", tcpPort);
+  LOG("Exiting main()");
   return 0;
 }

@@ -5,7 +5,7 @@ Combine [libgeodesk](https://github.com/clarisma/libgeodesk) and [vtzero](https:
 
 ## Usage ##
 
-On Linux, `git clone https://github.com/styluslabs/geodesk-tiles`, `git submodule update --init`, then `make` to create `build/Release/server`, then run `server <OSM GOL file> <ocean polygons GOL file>  to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}`.  The TCP port can be set with the `--port` option or `iptables` can be used to redirect port 80 to 8080 (so server needs no special permissions).
+On Linux, `git clone https://github.com/styluslabs/geodesk-tiles`, `git submodule update --init`, then `make` to create `build/Release/server` (compiler with C++20 support required), then run `server <OSM GOL file> <ocean polygons GOL file>`  to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}`.  The TCP port can be set with the `--port` option or `iptables` can be used to redirect port 80 to 8080 (so server needs no special permissions).
 
 The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build).
 
@@ -28,17 +28,23 @@ Coastline ways (`natural=coastline`) should be passed to `addCoastline()` instea
 
 [ascendtiles.cpp](ascendtiles.cpp) (a direct translation of the tilemaker script [process.lua](https://github.com/styluslabs/maps/blob/master/scripts/tilemaker/process.lua)) implements the [Ascend Maps](https://github.com/styluslabs/maps/) schema, which mostly just uses unmodified OSM tags for feature attributes.  Adapting for other schemas should be relatively straightforward.
 
+Rebuilding (i.e., running `make`) after schema changes should only take a few seconds.
+
 
 ## Details ##
 
-[server.cpp](server.cpp) uses [cpp-httplib](https://github.com/yhirose/cpp-httplib) to provide an HTTP server and sqlite to save generated tiles to an mbtiles file.
+At the moment, it is necessary to use a forked libgeodesk with [one small change](https://github.com/clarisma/libgeodesk/pull/6) which hopefully can be merged upstream.
 
-Simple Cohen–Sutherland line clipping is used in [clipper.h](clipper.h); more robust clipping for edge cases should be added in the future.
+[server.cpp](server.cpp) uses [cpp-httplib](https://github.com/yhirose/cpp-httplib) to provide an HTTP server and sqlite to save generated tiles to an mbtiles file.  Tile builder threads (number set by `--threads` option, defaulting to number of CPU cores minus one) share a queue to prevent duplicate work.
+
+Simple Cohen–Sutherland clipping is used in [clipper.h](clipper.h); more robust clipping for edge cases should be added in the future.
+
+For simplicity, every tile is built independently - processed geometry and attributes are not reused for building parents or children of tile.  Also, geometry with identical attributes is not currently combined in tile.
 
 
 ## Performance ##
 
-Results for dense urban area (San Francisco): time to build tile is ~1x to ~3x time to gzip tile (miniz level 5).
+Results for dense urban area (San Francisco): time to process tile is ~1x to ~3x time to gzip tile (miniz level 5).
 
     Tile 2617/6332/14/14 (243209 bytes) built in 43.5 ms (22.3 ms process 8486/10451 features w/ 116260 points, 21.2 ms gzip 489316 bytes)
     Tile 1308/3166/13/13 (50387 bytes) built in 17.8 ms (14.5 ms process 2856/30380 features w/ 10158 points, 3.3 ms gzip 105501 bytes)
