@@ -25,7 +25,7 @@ COMMIT;)";
 static const char* getTileSQL =
     "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?;";
 static const char* putTileSQL =
-    "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?,?,?,?);";
+    "REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?,?,?,?);";
 
 class TileDB : public SQLiteDB
 {
@@ -66,9 +66,10 @@ int main(int argc, char* argv[])
   // defaults
   const char* worldDBPath = "planet.mbtiles";
   int tcpPort = 8080;
-  int numBuildThreads = std::max(2U, std::thread::hardware_concurrency()) - 1;
+  int numBuildThreads = 1;  //std::max(2U, std::thread::hardware_concurrency()) - 1;
   TileID topTile(-1, -1, -1);
   int maxZ = 14;
+  std::string adminKey;
 
   int argi = 1;
   for(; argi < argc-1; argi += 2) {
@@ -89,6 +90,8 @@ int main(int argc, char* argv[])
     }
     else if(strcmp(argv[argi], "--maxz") == 0)
       maxZ = atoi(argv[argi+1]);
+    else if(strcmp(argv[argi], "--admin-key") == 0)
+      adminKey = argv[argi+1];
     else
       break;
   }
@@ -192,11 +195,15 @@ Optional arguments:
       worldDB.getTile = worldDB.stmt(getTileSQL);
     }
 
-    worldDB.getTile.bind(id.z, id.x, id.yTMS()).exec([&](sqlite3_stmt* stmt){
-      const char* blob = (const char*) sqlite3_column_blob(stmt, 0);
-      const int length = sqlite3_column_bytes(stmt, 0);
-      res.set_content(blob, length, "application/vnd.mapbox-vector-tile");
-    });
+    // X-Rebuild-Tile header to force tile rebuild (w/ valid admin key)
+    if(!adminKey.empty() && req.has_header("X-Rebuild-Tile") && req.get_header_value("X-Admin-Key") == adminKey) {}
+    else {
+      worldDB.getTile.bind(id.z, id.x, id.yTMS()).exec([&](sqlite3_stmt* stmt){
+        const char* blob = (const char*) sqlite3_column_blob(stmt, 0);
+        const int length = sqlite3_column_bytes(stmt, 0);
+        res.set_content(blob, length, "application/vnd.mapbox-vector-tile");
+      });
+    }
     // small chance that we could repeat tile build, but don't want to keep mutex locked during DB query
     if(res.body.empty()) {
       bool savetile = false;

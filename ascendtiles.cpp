@@ -634,27 +634,24 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
 {
   if(!MinZoom(12)) { return false; }  // no POIs below z12
 
-  bool force12 = area > 0 || Holds("wikipedia");
-  for (const ZMap& z : poiTags) {
-    auto val = readTag(z.tagCode());
-    if (bool(val) && (force12 || MinZoom(z[val]))) {
-      LayerAsCentroid("poi");
-      SetNameAttributes();
-      SetIdAttributes();
-      if (area > 0) { AttributeNumeric("area", area); }
-      // write value for all tags in poiTags (if present)
-      for(const ZMap& y : poiTags) { Attribute(y.tag(), readTag(y.tagCode())); }
-      for(auto& s : extraPoiTags) { Attribute(s.tag(), readTag(s.tagCode())); }
-      return true;
+  bool writepoi = force && Holds("name");
+  if(!writepoi) {
+    bool force12 = area > 0 || Holds("wikipedia");
+    for (const ZMap& z : poiTags) {
+      auto val = readTag(z.tagCode());
+      if (bool(val) && (force12 || MinZoom(z[val]))) { writepoi = true; break; }
     }
   }
-  if (force && Holds("name")) {
-    LayerAsCentroid("poi");
-    SetNameAttributes();
-    SetIdAttributes();
-    if (area > 0) { AttributeNumeric("area", area); }
-  }
-  return false;
+  if(!writepoi) { return false; }
+
+  LayerAsCentroid("poi");
+  SetNameAttributes();
+  SetIdAttributes();
+  if (area > 0) { AttributeNumeric("area", area); }
+  // write value for all tags in poiTags (if present)
+  for(const ZMap& y : poiTags) { Attribute(y.tag(), readTag(y.tagCode())); }
+  for(auto& s : extraPoiTags) { Attribute(s.tag(), readTag(s.tagCode())); }
+  return true;
 }
 
 // Common functions
