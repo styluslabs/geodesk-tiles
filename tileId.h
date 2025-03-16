@@ -8,8 +8,7 @@ namespace linalg
     typedef vec<int32_t,3> i32vec3; typedef vec<uint32_t,3> u32vec3; typedef vec<float,3> vec3; typedef vec<double,3> dvec3;
     typedef vec<int32_t,4> i32vec4; typedef vec<uint32_t,4> u32vec4; typedef vec<float,4> vec4; typedef vec<double,4> dvec4;
 }
-
-namespace glm = linalg;
+//namespace glm = linalg;
 
 // cut and paste from Tangram ES tileID.h
 
@@ -129,7 +128,7 @@ struct LngLat {
 
 // cut and paste from Tangram ES MapProjection
 
-using ProjectedMeters = glm::dvec2;
+using ProjectedMeters = linalg::dvec2;
 
 struct MapProjection
 {

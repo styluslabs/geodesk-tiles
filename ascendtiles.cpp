@@ -20,7 +20,11 @@ public:
 
   void WriteBoundary();
   void SetBuildingHeightAttributes();
+
   bool SetMinZoomByArea(double area = 0);
+  bool NewSetMinZoomByArea(double area);
+  bool OldSetMinZoomByArea(double area);
+
   void SetBrunnelAttributes();
   void SetEleAttributes();
   void SetNameAttributes(int minz = 0);
@@ -693,7 +697,7 @@ void AscendTileBuilder::SetBrunnelAttributes()
 
 // Meters per pixel if tile is 256x256
 constexpr double SQ(double x) { return x*x; }
-static constexpr double ZRES5  = SQ(4891.97);
+static constexpr double ZRES5  = SQ(4891.97);  // = SQ(MapProjection::metersPerTileAtZoom(z)/256)
 static constexpr double ZRES6  = SQ(2445.98);
 static constexpr double ZRES7  = SQ(1222.99);
 static constexpr double ZRES8  = SQ(611.5);
@@ -704,7 +708,7 @@ static constexpr double ZRES12 = SQ(38.2);
 static constexpr double ZRES13 = SQ(19.1);
 
 // Set minimum zoom level by area
-bool AscendTileBuilder::SetMinZoomByArea(double area)
+bool AscendTileBuilder::OldSetMinZoomByArea(double area)
 {
   if (MinZoom(14)) { return true; }  // skip area calc for highest zoom
   if (area <= 0) { area = Area(); }
@@ -718,6 +722,27 @@ bool AscendTileBuilder::SetMinZoomByArea(double area)
   else if (area > ZRES12) { return MinZoom(13); }
   else                    { return MinZoom(14); }
 }
+
+// Set minimum zoom level by area
+bool AscendTileBuilder::NewSetMinZoomByArea(double area)
+{
+  if (MinZoom(14)) { return true; }  // skip area calc for highest zoom
+  double minarea = SQ(MapProjection::metersPerTileAtZoom(m_id.z - 1)/256.0);
+  if (area > 0) { return area >= minarea; }
+  // bbox area sets upper limit on feature area
+  if (feature().bounds().area() < minarea) { return false; }
+  return Area() >= minarea;
+}
+
+bool AscendTileBuilder::SetMinZoomByArea(double area)
+{
+  bool oldres = OldSetMinZoomByArea(area);
+  bool newres = NewSetMinZoomByArea(area);
+  if(oldres != newres)
+    LOG("Whoops");
+  return oldres;
+}
+
 
 void AscendTileBuilder::SetBuildingHeightAttributes()
 {
@@ -783,7 +808,7 @@ void AscendTileBuilder::WriteBoundary()
       if (!f.isWay()) { continue; }
       // combining members view and bounded view is currently a "TODO" in libgeodesk, so check manually
       if (!m_tileBox.intersects(f.bounds())) { continue; }
-      m_feat = &f;  //SetFeature(f);  -- temporary (ha!) hack until we verify this works
+      setFeature(f);
       Layer("boundary", false);
       AttributeNumeric("admin_level", admin_level);
       Attribute("name", name);

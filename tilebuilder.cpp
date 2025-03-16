@@ -1,4 +1,5 @@
 #include "tilebuilder.h"
+#include "polylabel.hpp"
 #include <geom/polygon/RingCoordinateIterator.h>
 #include <geom/polygon/RingBuilder.h>
 #include <geom/polygon/Segment.h>
@@ -35,7 +36,7 @@ TileBuilder::TileBuilder(TileID _id, const std::vector<std::string>& layers) : m
   simplifyThresh = _id.z < 14 ? 1/512.0f : 0;  // no simplification for highest zoom (which can be overzoomed)
 }
 
-static LngLat tileCoordToLngLat(const TileID& tileId, glm::dvec2 tileCoord)
+static LngLat tileCoordToLngLat(const TileID& tileId, dvec2 tileCoord)
 {
   double scale = MapProjection::metersPerTileAtZoom(tileId.z);
   ProjectedMeters tileOrigin = MapProjection::tileSouthWestCorner(tileId);
@@ -50,6 +51,13 @@ static Box tileBox(const TileID& id, double eps = 0.0)
   return Box::ofWSEN(minBBox.longitude, minBBox.latitude, maxBBox.longitude, maxBBox.latitude);
 }
 
+void TileBuilder::setFeature(Feature& feat)
+{
+  m_feat = &feat;
+  m_area = NAN;
+  m_featMPoly.clear();
+}
+
 std::string TileBuilder::build(const Features& world, const Features& ocean, bool compress)
 {
   auto time0 = std::chrono::steady_clock::now();
@@ -61,10 +69,8 @@ std::string TileBuilder::build(const Features& world, const Features& ocean, boo
 
   int nfeats = 0;
   for(Feature f : tileFeats) {
-    m_feat = &f;
+    setFeature(f);
     processFeature();
-    //if(f.isWay() && Find("natural") == "coastline") { addCoastline(f); }  -- now in processFeature()
-    m_area = NAN;
     ++nfeats;
   }
   m_feat = nullptr;
@@ -101,7 +107,7 @@ std::string TileBuilder::build(const Features& world, const Features& ocean, boo
   double dt12 = std::chrono::duration<double>(time2 - time1).count()*1000;
   double dt02 = std::chrono::duration<double>(time2 - time0).count()*1000;
   LOG("Tile %s (%d bytes) built in %.1f ms (%.1f ms process %d/%d features w/ %d points, %.1f ms gzip %d bytes)",
-      m_id.toString().c_str(), int(mvt.size()), dt02, dt01, m_totalFeats, nfeats, m_totalPts, dt12, origsize);
+      m_id.toString().c_str(), int(mvt.size()), dt02, dt01, m_builtFeats, nfeats, m_builtPts, dt12, origsize);
 
   return mvt;
 }
@@ -157,7 +163,7 @@ static void simplify(std::vector<vt_point>& pts, real thresh)
 
 // from ulib/geom.cpp
 template<class T>
-real polygonArea(const std::vector<T>& points)
+real linearRingArea(const std::vector<T>& points)
 {
   real area = 0;
   for(size_t ii = 0, jj = points.size() - 1; ii < points.size(); jj = ii++)
@@ -179,7 +185,7 @@ bool pointInPolygon(const std::vector<T>& poly, T p)
 
 // convert to relative tile coord (float 0..1)
 vt_point TileBuilder::toTileCoord(Coordinate r) {
-  return vt_point(m_scale*(glm::dvec2(r.x, r.y) - m_origin));  // + 0.5);
+  return vt_point(m_scale*(dvec2(r.x, r.y) - m_origin));  // + 0.5);
 }
 
 // clockwise distance along tile perimeter from 0,0 to point p
@@ -201,7 +207,7 @@ void TileBuilder::buildCoastline()
   vt_polygon inners;
   auto add_ring = [&](auto&& ring) {
     // water is on right side of coastline ways, so outer rings are clockwise (area < 0)
-    return polygonArea(ring) > 0 ? inners.emplace_back(std::move(ring))
+    return linearRingArea(ring) > 0 ? inners.emplace_back(std::move(ring))
         : outers.emplace_back().emplace_back(std::move(ring));
   };
 
@@ -310,7 +316,7 @@ void TileBuilder::buildCoastline()
       tilePts.reserve(ring.size());
       // flipping y will flip the winding direction, as desired for MVT convention of CCW outer
       for(auto it = ring.begin(); it != ring.end(); ++it) {
-        auto ip = glm::i32vec2(it->x*tileExtent + 0.5f, (1 - it->y)*tileExtent + 0.5f);
+        auto ip = i32vec2(it->x*tileExtent + 0.5f, (1 - it->y)*tileExtent + 0.5f);
         if(tilePts.empty() || ip != tilePts.back())
           tilePts.push_back(ip);
       }
@@ -320,7 +326,7 @@ void TileBuilder::buildCoastline()
       }
       else {
         m_hasGeom = true;
-        m_totalPts += tilePts.size();
+        m_builtPts += tilePts.size();
         build->add_ring_from_container(tilePts);
       }
       tilePts.clear();
@@ -328,11 +334,11 @@ void TileBuilder::buildCoastline()
   }
 }
 
-void TileBuilder::addCoastline(Feature& way)
+vt_multi_line_string TileBuilder::loadWayFeature(Feature& way)
 {
+  vt_line_string tempPts;
   WayCoordinateIterator iter(WayPtr(way.ptr()));
   int n = iter.coordinatesRemaining();
-  vt_line_string tempPts;
   tempPts.reserve(n);
   vt_point pmin(REAL_MAX, REAL_MAX), pmax(-REAL_MAX, -REAL_MAX);
   while(n-- > 0) {
@@ -341,47 +347,24 @@ void TileBuilder::addCoastline(Feature& way)
     pmin = min(p, pmin);
     pmax = max(p, pmax);
   }
+  // see if we can skip clipping
+  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { return {}; }
+  if(pmin.x >= 0 && pmin.y >= 0 && pmax.x <= 1 && pmax.y <= 1) { return {tempPts}; }
+  clipper<0> xclip{0,1};
+  clipper<1> yclip{0,1};
+  return yclip(xclip(tempPts));
+}
 
-  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { return; }
-  vt_multi_line_string clipPts;
-  bool noclip = pmin.x >= 0 && pmin.y >= 0 && pmax.x <= 1 && pmax.y <= 1;
-  if(noclip) { clipPts.push_back(std::move(tempPts)); }
-  else {
-    clipper<0> xclip{0,1};
-    clipper<1> yclip{0,1};
-    clipPts = yclip(xclip(tempPts));
-  }
-
+void TileBuilder::addCoastline(Feature& way)
+{
+  vt_multi_line_string clipPts = loadWayFeature(way);
   m_coastline.insert(m_coastline.end(),
       std::make_move_iterator(clipPts.begin()), std::make_move_iterator(clipPts.end()));
 }
 
 void TileBuilder::buildLine(Feature& way)
 {
-  vt_line_string tempPts;
-
-  WayCoordinateIterator iter(WayPtr(way.ptr()));
-  int n = iter.coordinatesRemaining();
-  tempPts.reserve(n);
-  vt_point pmin(REAL_MAX, REAL_MAX), pmax(-REAL_MAX, -REAL_MAX);
-  while(n-- > 0) {
-    vt_point p = toTileCoord(iter.next());
-    tempPts.push_back(p);
-    pmin = min(p, pmin);
-    pmax = max(p, pmax);
-  }
-
-  // see if we can skip clipping
-  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { return; }
-  vt_multi_line_string clipPts;
-  bool noclip = pmin.x >= 0 && pmin.y >= 0 && pmax.x <= 1 && pmax.y <= 1;
-  if(noclip) { clipPts.push_back(std::move(tempPts)); }
-  else {
-    clipper<0> xclip{0,1};
-    clipper<1> yclip{0,1};
-    clipPts = yclip(xclip(tempPts));
-  }
-
+  vt_multi_line_string clipPts = loadWayFeature(way);
   auto build = static_cast<vtzero::linestring_feature_builder*>(m_build.get());
   for(auto& line : clipPts) {
     simplify(line, simplifyThresh);
@@ -389,13 +372,13 @@ void TileBuilder::buildLine(Feature& way)
     tilePts.reserve(line.size());
     for(auto& p : line) {
       // MVT origin is upper left (NW), whereas geodesk/mercator origin is lower left (SW)
-      auto ip = glm::i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
+      auto ip = i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
       if(tilePts.empty() || ip != tilePts.back())
         tilePts.push_back(ip);
     }
     if(tilePts.size() > 1) {
       m_hasGeom = true;
-      m_totalPts += tilePts.size();
+      m_builtPts += tilePts.size();
       build->add_linestring_from_container(tilePts);
     }  //else LOG("Why?");
     tilePts.clear();
@@ -403,7 +386,7 @@ void TileBuilder::buildLine(Feature& way)
 }
 
 template<class T>
-void TileBuilder::addRing(vt_polygon& poly, T&& iter)
+double TileBuilder::addRing(vt_polygon& poly, T&& iter)
 {
   int n = iter.coordinatesRemaining();
   vt_linear_ring& ring = poly.emplace_back();
@@ -415,59 +398,84 @@ void TileBuilder::addRing(vt_polygon& poly, T&& iter)
     pmin = min(p, pmin);
     pmax = max(p, pmax);
   }
-  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { poly.pop_back(); }
-  else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
-    clipper<0> xclip{0,1};
-    clipper<1> yclip{0,1};
-    ring = yclip(xclip(ring));
-  }
-}
-
-template<class B, class It>
-static void set_points(B& build, It _begin, It _end)
-{
-  for(It it = _begin; it != _end; ++it)
-    build.set_point(*it);
-}
-
-void TileBuilder::buildPolygon(Feature& feat)
-{
-  vt_multi_polygon tempMP;
-
-  if(feat.isWay()) {
-    addRing(tempMP.emplace_back(), WayCoordinateIterator(WayPtr(feat.ptr())));
+  // we want area of whole feature, before clipping
+  real area = linearRingArea(ring);
+  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) {
+    ring.clear();  //poly.pop_back();
   }
   else {
-    // also done for computing area - should eliminate this repetition
+    if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
+      clipper<0> xclip{0,1};
+      clipper<1> yclip{0,1};
+      ring = yclip(xclip(ring));
+    }
+    simplify(ring, simplifyThresh);
+  }
+  return area;
+}
+
+//template<class B, class It>
+//static void set_points(B& build, It _begin, It _end)
+//{
+//  for(It it = _begin; it != _end; ++it)
+//    build.set_point(*it);
+//}
+
+// Tangram mvt.cpp fixes the winding direction for outer ring from the first polygon in the tile, rather
+//  than using the MVT spec of positive signed area or using the winding of the first ring of each
+//  multipolygon; in any case, we should just follow the spec
+
+void TileBuilder::loadAreaFeature()
+{
+  if(!m_featMPoly.empty()) { return; }  //if(!std::isnan(m_area)) { return; }
+
+  if(feature().isWay()) {
+    vt_polygon& poly = m_featMPoly.emplace_back();
+    double area = addRing(poly, WayCoordinateIterator(WayPtr(feature().ptr())));
+    if(area < 0) { std::reverse(poly.back().begin(), poly.back().end()); }
+    m_area = std::abs(area);
+  }
+  else {
+    m_area = 0;
     Polygonizer polygonizer;
-    polygonizer.createRings(feat.store(), RelationPtr(feature().ptr()));
+    polygonizer.createRings(feature().store(), RelationPtr(feature().ptr()));
     polygonizer.assignAndMergeHoles();
     const Polygonizer::Ring* outer = polygonizer.outerRings();
     while(outer) {
-      vt_polygon& tempPoly = tempMP.emplace_back();
-      addRing(tempPoly, RingCoordinateIterator(outer));
+      vt_polygon& poly = m_featMPoly.emplace_back();
+      double area = addRing(poly, RingCoordinateIterator(outer));
+      if(area < 0) { std::reverse(poly.back().begin(), poly.back().end()); }
+      m_area += std::abs(area);
       const Polygonizer::Ring* inner = outer->firstInner();
       while(inner) {
-        addRing(tempPoly, RingCoordinateIterator(inner));
+        area = addRing(poly, RingCoordinateIterator(inner));
+        if(area > 0) { std::reverse(poly.back().begin(), poly.back().end()); }
+        m_area -= std::abs(area);
         inner = inner->next();
       }
       outer = outer->next();
     }
   }
 
-  // Tangram mvt.cpp fixes the winding direction for outer ring from the first polygon in the tile, rather
-  //  than using the MVT spec of positive signed area or using the winding of the first ring of each
-  //  multipolygon; in any case, we should just follow the spec
+  // tile units^2 to meters^2
+  double s = MapProjection::metersPerTileAtZoom(m_id.z);
+  m_area *= s*s;
 
+  LOG("Our area: %f; geodesk area: %f", m_area, feature().area());
+}
+
+void TileBuilder::buildPolygon()
+{
+  loadAreaFeature();
   auto build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
-  for(vt_polygon& outer : tempMP) {
+  for(vt_polygon& outer : m_featMPoly) {
     bool isouter = true;
     for(vt_linear_ring& ring : outer) {
-      simplify(ring, simplifyThresh);
+      //simplify(ring, simplifyThresh);
       tilePts.reserve(ring.size());
       // note that flipping y will flip the winding direction
       for(auto& p : ring) {
-        auto ip = glm::i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
+        auto ip = i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
         if(tilePts.empty() || ip != tilePts.back())
           tilePts.push_back(ip);
       }
@@ -478,17 +486,31 @@ void TileBuilder::buildPolygon(Feature& feat)
       }
       else {
         m_hasGeom = true;
-        m_totalPts += tilePts.size();
-        build->add_ring(tilePts.size());
-        if((polygonArea(ring) < 0) != isouter)
-          set_points(*build, tilePts.rbegin(), tilePts.rend());
-        else
-          set_points(*build, tilePts.begin(), tilePts.end());
+        m_builtPts += tilePts.size();
+
+        if((linearRingArea(ring) < 0) != isouter)
+          LOG("Uhoh");
+
+        build->add_ring_from_container(tilePts);
+        //build->add_ring(tilePts.size());
+        //if((polygonArea(ring) < 0) != isouter)
+        //  set_points(*build, tilePts.rbegin(), tilePts.rend());
+        //else
+        //  set_points(*build, tilePts.begin(), tilePts.end());
       }
       isouter = false;  // any additional rings in this polygon are inner rings
       tilePts.clear();
     }
   }
+}
+
+double TileBuilder::Area()
+{
+  if(std::isnan(m_area)) {
+    if(!feature().isArea()) { m_area = 0; }
+    else { loadAreaFeature(); }
+  }
+  return m_area;
 }
 
 //GetParents() return m_tileFeats->relations().parentsOf(feature()); -- crashes since parent iteration not implemented
@@ -500,7 +522,7 @@ Features TileBuilder::GetMembers()
 void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
 {
   if(m_build && m_hasGeom) {
-    ++m_totalFeats;
+    ++m_builtFeats;
     m_build->commit();
   }
   m_build.reset();  // have to commit/rollback before creating next builder
@@ -520,21 +542,30 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
     buildCoastline();
   }
   else if(feature().isNode() || _centroid) {
+    vt_point p;  //= toTileCoord(_centroid ? feature().centroid() : feature().xy());
+    if(feature().isArea()) {
+      loadAreaFeature();
+      if(m_featMPoly.size() > 1) {
+        LOG("Requested centroid for multipolygon feature %s", Id().c_str());
+      }
+      p = mapbox::polylabel(m_featMPoly[0]);  // m_featMPoly already in tile coords
+    }
+    else
+      p = toTileCoord(feature().centroid());
+
     auto build = std::make_unique<vtzero::point_feature_builder>(layerBuild);
-    //build->set_id(++serial);
-    auto p = toTileCoord(_centroid ? feature().centroid() : feature().xy());
-    auto ip = glm::i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
     m_hasGeom = p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1;
     if(m_hasGeom) {
-      ++m_totalPts;
+      auto ip = i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
       build->add_point(ip.x, ip.y);
+      ++m_builtPts;
     }
     m_build = std::move(build);
   }
   else if(feature().isArea()) {
     //if(!isClosed) { LOG("isArea() but not isClosed!"); }
     m_build = std::make_unique<vtzero::polygon_feature_builder>(layerBuild);
-    buildPolygon(feature());
+    buildPolygon();
   }
   else {
     //if(isClosed) { LOG("isClosed but not isArea()!"); }

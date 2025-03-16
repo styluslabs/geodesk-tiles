@@ -11,6 +11,9 @@ using geodesk::Mercator;
 using geodesk::Coordinate;
 using geodesk::TagValue;
 
+using dvec2 = linalg::dvec2;
+using i32vec2 = linalg::i32vec2;
+
 #define LOG(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
 #ifdef NDEBUG
 #define LOGD(...) do {} while(0)
@@ -35,23 +38,26 @@ public:
 
   geodesk::Box m_tileBox;
   Features* m_tileFeats = nullptr;
-  Feature* m_feat = nullptr;  //std::reference_wrapper<Feature> m_feat;
   std::unique_ptr<vtzero::feature_builder> m_build;
+
+  // current feature
+  Feature* m_feat = nullptr;  //std::reference_wrapper<Feature> m_feat;
+  vt_multi_polygon m_featMPoly;
   double m_area = NAN;
 
   // coord mapping
-  glm::dvec2 m_origin;
+  dvec2 m_origin;
   double m_scale = 0;
   const float tileExtent = 4096;  // default vtzero extent
   float simplifyThresh = 1/512.0f;
 
   // stats
-  int m_totalPts = 0;
-  int m_totalFeats = 0;
+  int m_builtPts = 0;
+  int m_builtFeats = 0;
   bool m_hasGeom = false;  // doesn't seem we can get this from vtzero
 
   // temp containers
-  std::vector<glm::i32vec2> tilePts;
+  std::vector<i32vec2> tilePts;
 
   // coastline
   vt_multi_line_string m_coastline;
@@ -62,9 +68,10 @@ public:
 
   TileBuilder(TileID _id, const std::vector<std::string>& layers);
   Feature& feature() { return *m_feat; }
-  glm::vec2 toTileCoord(Coordinate r);
+  vt_point toTileCoord(Coordinate r);
   virtual void processFeature() = 0;
   std::string build(const Features& world, const Features& ocean, bool compress = true);
+  void setFeature(Feature& feat);
 
   // reading geodesk feature
   //std::string Find(const std::string& key) { return feature()[key]; }
@@ -73,7 +80,7 @@ public:
   //bool Holds(const std::string& key) { return Find(key) != ""; }
   bool IsClosed() { return feature().isArea(); }
   double Length() { return feature().length(); }
-  double Area() { if(std::isnan(m_area)) { m_area = feature().area(); }  return m_area; }
+  double Area();
   //double AreaIntersecting();
   Features GetMembers();
 
@@ -92,8 +99,10 @@ public:
 
 //private:
   void buildLine(Feature& way);
-  void buildPolygon(Feature& way);
-  template<class T> void addRing(vt_polygon& poly, T&& iter);
+  vt_multi_line_string loadWayFeature(Feature& way);
+  void buildPolygon();
+  template<class T> double addRing(vt_polygon& poly, T&& iter);
+  void loadAreaFeature();
 
   void addCoastline(Feature& way);
   void buildCoastline();

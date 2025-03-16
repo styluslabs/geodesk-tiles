@@ -1,25 +1,23 @@
 #pragma once
 
 #include <vector>
-#include "linalg.h"
+#include "geometry.h"
 
 // clipper from geojson-vt-cpp
 
 using real = float;
-using vt_point = linalg::vec<float,2>;  //glm::vec2;
 constexpr real REAL_MAX = std::numeric_limits<real>::max();
 
-template <uint8_t I, typename T>
-inline real get(const T&);
+using vt_point = geometry::point<real>;
+using vt_line_string = geometry::line_string<real>;
+using vt_multi_line_string = geometry::multi_line_string<real>;
+using vt_linear_ring = geometry::linear_ring<real>;
+using vt_polygon = geometry::polygon<real>;
+using vt_multi_polygon = geometry::multi_polygon<real>;
 
-template <>
-inline real get<0>(const vt_point& p) {
-    return p.x;
-}
-template <>
-inline real get<1>(const vt_point& p) {
-    return p.y;
-}
+template <uint8_t I, typename T> inline real get(const T&);
+template <> inline real get<0>(const vt_point& p) { return p.x; }
+template <> inline real get<1>(const vt_point& p) { return p.y; }
 
 template <uint8_t I>
 inline vt_point intersect(const vt_point&, const vt_point&, const real);
@@ -34,30 +32,6 @@ inline vt_point intersect<1>(const vt_point& a, const vt_point& b, const real y)
     const real x = (y - a.y) * (b.x - a.x) / (b.y - a.y) + a.x;
     return { x, y };  //, 1.0 };
 }
-
-// using vt_multi_point = std::vector<vt_point>;
-
-struct vt_line_string : std::vector<vt_point> {
-    using container_type = std::vector<vt_point>;
-    using container_type::container_type;
-
-    vt_line_string(const std::vector<vt_point>& lr) : container_type(lr) {}
-    vt_line_string(std::vector<vt_point>&& lr) noexcept : container_type(std::move(lr)) {}
-    //real dist = 0.0; // line length
-};
-
-struct vt_linear_ring : std::vector<vt_point> {
-    using container_type = std::vector<vt_point>;
-    using container_type::container_type;
-
-    vt_linear_ring(const std::vector<vt_point>& ls) : container_type(ls) {}
-    vt_linear_ring(std::vector<vt_point>&& ls) noexcept : container_type(std::move(ls)) {}
-    //real area = 0.0; // polygon ring area
-};
-
-using vt_multi_line_string = std::vector<vt_line_string>;
-using vt_polygon = std::vector<vt_linear_ring>;
-using vt_multi_polygon = std::vector<vt_polygon>;
 
 /* clip features between two axis-parallel lines:
  *     |        |
