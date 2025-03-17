@@ -18,7 +18,13 @@ extern std::string buildTile(const Features& world, const Features& ocean, TileI
 // WAL allows simultaneous reading and writing
 static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
 BEGIN;
-  CREATE TABLE IF NOT EXISTS tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);
+  CREATE TABLE IF NOT EXISTS tiles (
+    zoom_level INTEGER,
+    tile_column INTEGER,
+    tile_row INTEGER,
+    tile_data BLOB,
+    created_at INTEGER DEFAULT (CAST(strftime('%s') AS INTEGER))
+  );
   CREATE UNIQUE INDEX IF NOT EXISTS tile_index on tiles (zoom_level, tile_column, tile_row);
 COMMIT;)";
 

@@ -20,11 +20,7 @@ public:
 
   void WriteBoundary();
   void SetBuildingHeightAttributes();
-
   bool SetMinZoomByArea(double area = 0);
-  bool NewSetMinZoomByArea(double area);
-  bool OldSetMinZoomByArea(double area);
-
   void SetBrunnelAttributes();
   void SetEleAttributes();
   void SetNameAttributes(int minz = 0);
@@ -46,6 +42,15 @@ std::string buildTile(const Features& world, const Features& ocean, TileID id)
 }
 
 // AscendTileBuilder impl
+
+//static void dumpFeature(Feature& f, std::string s = {})
+//{
+//  s.append(std::to_string(f.id())).append(" -");
+//  for(auto tag : f.tags()) {
+//    s.append(" ").append(std::string_view(tag.key())).append("=").append(std::string(tag.value()));
+//  }
+//  LOG("%s", s.c_str());
+//}
 
 // we could try something like github.com/serge-sans-paille/frozen or github.com/renzibei/fph-table for
 //  the set/map here, but at this point, tag lookup is only a small part of CPU time
@@ -695,54 +700,18 @@ void AscendTileBuilder::SetBrunnelAttributes()
   else if (Find("ford") == "yes") { Attribute("brunnel", "ford"); }
 }
 
-// Meters per pixel if tile is 256x256
 constexpr double SQ(double x) { return x*x; }
-static constexpr double ZRES5  = SQ(4891.97);  // = SQ(MapProjection::metersPerTileAtZoom(z)/256)
-static constexpr double ZRES6  = SQ(2445.98);
-static constexpr double ZRES7  = SQ(1222.99);
-static constexpr double ZRES8  = SQ(611.5);
-static constexpr double ZRES9  = SQ(305.7);
-static constexpr double ZRES10 = SQ(152.9);
-static constexpr double ZRES11 = SQ(76.4);
-static constexpr double ZRES12 = SQ(38.2);
-static constexpr double ZRES13 = SQ(19.1);
 
 // Set minimum zoom level by area
-bool AscendTileBuilder::OldSetMinZoomByArea(double area)
-{
-  if (MinZoom(14)) { return true; }  // skip area calc for highest zoom
-  if (area <= 0) { area = Area(); }
-  if      (area > ZRES5 ) { return MinZoom(6);  }
-  else if (area > ZRES6 ) { return MinZoom(7);  }
-  else if (area > ZRES7 ) { return MinZoom(8);  }
-  else if (area > ZRES8 ) { return MinZoom(9);  }
-  else if (area > ZRES9 ) { return MinZoom(10); }
-  else if (area > ZRES10) { return MinZoom(11); }
-  else if (area > ZRES11) { return MinZoom(12); }
-  else if (area > ZRES12) { return MinZoom(13); }
-  else                    { return MinZoom(14); }
-}
-
-// Set minimum zoom level by area
-bool AscendTileBuilder::NewSetMinZoomByArea(double area)
+bool AscendTileBuilder::SetMinZoomByArea(double area)
 {
   if (MinZoom(14)) { return true; }  // skip area calc for highest zoom
   double minarea = SQ(MapProjection::metersPerTileAtZoom(m_id.z - 1)/256.0);
   if (area > 0) { return area >= minarea; }
   // bbox area sets upper limit on feature area
-  if (feature().bounds().area() < minarea) { return false; }
+  if (feature().ptr().bounds().area() < minarea) { return false; }
   return Area() >= minarea;
 }
-
-bool AscendTileBuilder::SetMinZoomByArea(double area)
-{
-  bool oldres = OldSetMinZoomByArea(area);
-  bool newres = NewSetMinZoomByArea(area);
-  if(oldres != newres)
-    LOG("Whoops");
-  return oldres;
-}
-
 
 void AscendTileBuilder::SetBuildingHeightAttributes()
 {

@@ -427,12 +427,14 @@ double TileBuilder::addRing(vt_polygon& poly, T&& iter)
 
 void TileBuilder::loadAreaFeature()
 {
-  if(!m_featMPoly.empty()) { return; }  //if(!std::isnan(m_area)) { return; }
+  if(!std::isnan(m_area)) { return; }  // already loaded?
 
   if(feature().isWay()) {
     vt_polygon& poly = m_featMPoly.emplace_back();
+    // note that sign of area will be reversed when y flip of tile coords
     double area = addRing(poly, WayCoordinateIterator(WayPtr(feature().ptr())));
-    if(area < 0) { std::reverse(poly.back().begin(), poly.back().end()); }
+    if(poly.back().empty()) { m_featMPoly.pop_back(); }
+    else if(area > 0) { std::reverse(poly.back().begin(), poly.back().end()); }
     m_area = std::abs(area);
   }
   else {
@@ -444,24 +446,28 @@ void TileBuilder::loadAreaFeature()
     while(outer) {
       vt_polygon& poly = m_featMPoly.emplace_back();
       double area = addRing(poly, RingCoordinateIterator(outer));
-      if(area < 0) { std::reverse(poly.back().begin(), poly.back().end()); }
+      if(area > 0) { std::reverse(poly.back().begin(), poly.back().end()); }
       m_area += std::abs(area);
       const Polygonizer::Ring* inner = outer->firstInner();
       while(inner) {
         area = addRing(poly, RingCoordinateIterator(inner));
-        if(area > 0) { std::reverse(poly.back().begin(), poly.back().end()); }
+        if(poly.back().empty()) { poly.pop_back(); }
+        else if(area < 0) { std::reverse(poly.back().begin(), poly.back().end()); }
         m_area -= std::abs(area);
         inner = inner->next();
       }
+      if(poly.front().empty()) { m_featMPoly.pop_back(); }  // remove whole polygon if outer empty
       outer = outer->next();
     }
   }
 
-  // tile units^2 to meters^2
+  // tile units^2 to mercator meters^2
+  // geodesk area computes area in mercator meters, then scales based on latitude; tilemaker uses
+  //  boost::geometry to calculate exact area on spherical surface; we just use mercator meters since
+  //  this is what Tangram expects (and makes sense for determining if feature should be shown on tile)
   double s = MapProjection::metersPerTileAtZoom(m_id.z);
   m_area *= s*s;
-
-  LOG("Our area: %f; geodesk area: %f", m_area, feature().area());
+  //double t = Mercator::scale(feature().xy().y); m_area /= (t*t);
 }
 
 void TileBuilder::buildPolygon()
@@ -482,7 +488,7 @@ void TileBuilder::buildPolygon()
       // tiny polygons get simplified to two points and discarded ... calculate area instead?
       if(tilePts.size() < 4) {}
       else if(tilePts.back() != tilePts.front()) {
-        LOGD("Invalid polygon for feature %lld", feat.id());
+        LOGD("Invalid polygon for feature %lld", feature().id());
       }
       else {
         m_hasGeom = true;
@@ -542,13 +548,14 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
     buildCoastline();
   }
   else if(feature().isNode() || _centroid) {
-    vt_point p;  //= toTileCoord(_centroid ? feature().centroid() : feature().xy());
+    vt_point p(-1, -1);  //= toTileCoord(_centroid ? feature().centroid() : feature().xy());
     if(feature().isArea()) {
       loadAreaFeature();
-      if(m_featMPoly.size() > 1) {
-        LOG("Requested centroid for multipolygon feature %s", Id().c_str());
-      }
-      p = mapbox::polylabel(m_featMPoly[0]);  // m_featMPoly already in tile coords
+      if(m_featMPoly.size() > 1)
+        LOGD("Requested centroid for multipolygon feature %s", Id().c_str());
+      // m_featMPoly already in tile coords; 1/256 precision for geometry in normalized tile coords
+      if(!m_featMPoly.empty())
+        p = mapbox::polylabel(m_featMPoly[0], 1/256.0f);
     }
     else
       p = toTileCoord(feature().centroid());
