@@ -65,7 +65,7 @@ struct Set {
 struct ZMap {
   using map_t = std::unordered_map<std::string, int>;
   std::string m_tag;
-  mutable CodedString m_tagCode = {{}, INT_MAX};
+  mutable CodedString m_tagCode;  // = {{}, INT_MAX};
   map_t m_items;
   const int m_dflt = 100;
   ZMap(std::string_view _tag, int _dflt=100) : m_tag(_tag), m_dflt(_dflt) {}
@@ -78,7 +78,7 @@ struct ZMap {
 
   const std::string& tag() const { return m_tag; }
   const CodedString& tagCode() const {
-    if(m_tagCode.code == INT_MAX)
+    if(m_tagCode.isNull())
       m_tagCode = TileBuilder::getCodedString(m_tag);
     return m_tagCode;
   }
@@ -405,7 +405,7 @@ void AscendTileBuilder::ProcessWay()
   // Railways ('transportation' and 'transportation_name', plus 'transportation_name_detail');
   auto railway = Find("railway");
   if (railway) {  //!= ""
-    auto service  = Find("service");
+    auto service = Find("service");
     if (!MinZoom(service ? 12 : 9)) { return; }
     Layer("transportation", false);
     Attribute("class", "rail");
@@ -506,8 +506,8 @@ void AscendTileBuilder::ProcessWay()
   }
 
   // landuse/landcover
-  auto amenity  = Find("amenity");
-  auto tourism  = Find("tourism");
+  auto amenity = Find("amenity");
+  auto tourism = Find("tourism");
 
   if (landuse == "field") { landuse = "farmland"; }
   else if (landuse == "meadow" && Find("meadow") == "agricultural") { landuse = "farmland"; }

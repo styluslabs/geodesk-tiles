@@ -72,7 +72,7 @@ int main(int argc, char* argv[])
   // defaults
   const char* worldDBPath = "planet.mbtiles";
   int tcpPort = 8080;
-  int numBuildThreads = 1;  //std::max(2U, std::thread::hardware_concurrency()) - 1;
+  int numBuildThreads = std::max(2U, std::thread::hardware_concurrency()) - 1;
   TileID topTile(-1, -1, -1);
   int maxZ = 14;
   std::string adminKey;

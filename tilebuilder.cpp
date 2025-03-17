@@ -20,7 +20,7 @@ Features* TileBuilder::worldFeats = nullptr;
 
 CodedString TileBuilder::getCodedString(std::string_view s)
 {
-  return CodedString{s, worldFeats->store()->strings().getCode(s.data(), s.size())};
+  return worldFeats->key(s);  //CodedString{s, worldFeats->store()->strings().getCode(s.data(), s.size())};
 }
 
 

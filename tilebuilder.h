@@ -23,13 +23,10 @@ template<typename T> constexpr T squared(T x) { return x*x; }
 #define LOGD LOG
 #endif
 
-struct CodedString {
-  std::string_view str;
-  int code;
-};
+using CodedString = geodesk::Key;
 
 // can't think of a way to do this (w/o separate list of tag strings) w/o using macro
-#define Find(s) readTag( []() -> const CodedString& { static CodedString cs = TileBuilder::getCodedString(s); return cs; }() )
+#define Find(s) readTag( [](){ static CodedString cs = TileBuilder::getCodedString(s); return cs; }() )
 #define Holds(s) bool(Find(s))
 
 class TileBuilder
@@ -76,8 +73,7 @@ public:
   void setFeature(Feature& feat);
 
   // reading geodesk feature
-  //std::string Find(const std::string& key) { return feature()[key]; }
-  TagValue readTag(const CodedString& cs) { return m_feat->getTagWithCode(cs.str, cs.code); }
+  TagValue readTag(CodedString cs) { return feature()[cs]; }
   std::string Id() { return std::to_string(feature().id()); }
   //bool Holds(const std::string& key) { return Find(key) != ""; }
   bool IsClosed() { return feature().isArea(); }
