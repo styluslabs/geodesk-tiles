@@ -14,6 +14,8 @@ using geodesk::TagValue;
 using dvec2 = linalg::dvec2;
 using i32vec2 = linalg::i32vec2;
 
+template<typename T> constexpr T squared(T x) { return x*x; }
+
 #define LOG(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
 #ifdef NDEBUG
 #define LOGD(...) do {} while(0)

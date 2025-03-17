@@ -334,9 +334,17 @@ void TileBuilder::buildCoastline()
   }
 }
 
+void TileBuilder::addCoastline(Feature& way)
+{
+  vt_multi_line_string clipPts = loadWayFeature(way);
+  m_coastline.insert(m_coastline.end(),
+      std::make_move_iterator(clipPts.begin()), std::make_move_iterator(clipPts.end()));
+}
+
 vt_multi_line_string TileBuilder::loadWayFeature(Feature& way)
 {
-  vt_line_string tempPts;
+  vt_multi_line_string clipPts;
+  vt_line_string& tempPts = clipPts.emplace_back();
   WayCoordinateIterator iter(WayPtr(way.ptr()));
   int n = iter.coordinatesRemaining();
   tempPts.reserve(n);
@@ -348,24 +356,19 @@ vt_multi_line_string TileBuilder::loadWayFeature(Feature& way)
     pmax = max(p, pmax);
   }
   // see if we can skip clipping
-  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { return {}; }
-  if(pmin.x >= 0 && pmin.y >= 0 && pmax.x <= 1 && pmax.y <= 1) { return {tempPts}; }
-  clipper<0> xclip{0,1};
-  clipper<1> yclip{0,1};
-  return yclip(xclip(tempPts));
-}
-
-void TileBuilder::addCoastline(Feature& way)
-{
-  vt_multi_line_string clipPts = loadWayFeature(way);
-  m_coastline.insert(m_coastline.end(),
-      std::make_move_iterator(clipPts.begin()), std::make_move_iterator(clipPts.end()));
+  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { clipPts.clear(); }
+  else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
+    clipper<0> xclip{0,1};
+    clipper<1> yclip{0,1};
+    clipPts = yclip(xclip(tempPts));
+  }
+  return clipPts;
 }
 
 void TileBuilder::buildLine(Feature& way)
 {
   vt_multi_line_string clipPts = loadWayFeature(way);
-  auto build = static_cast<vtzero::linestring_feature_builder*>(m_build.get());
+  auto* build = static_cast<vtzero::linestring_feature_builder*>(m_build.get());
   for(auto& line : clipPts) {
     simplify(line, simplifyThresh);
     // vtzero throws error on duplicate points
@@ -400,26 +403,15 @@ double TileBuilder::addRing(vt_polygon& poly, T&& iter)
   }
   // we want area of whole feature, before clipping
   real area = linearRingArea(ring);
-  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) {
-    ring.clear();  //poly.pop_back();
+  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { ring.clear(); }
+  else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
+    clipper<0> xclip{0,1};
+    clipper<1> yclip{0,1};
+    ring = yclip(xclip(ring));
   }
-  else {
-    if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
-      clipper<0> xclip{0,1};
-      clipper<1> yclip{0,1};
-      ring = yclip(xclip(ring));
-    }
-    simplify(ring, simplifyThresh);
-  }
+  // wait until feature is accepted to simplify (which is a bit slow)
   return area;
 }
-
-//template<class B, class It>
-//static void set_points(B& build, It _begin, It _end)
-//{
-//  for(It it = _begin; it != _end; ++it)
-//    build.set_point(*it);
-//}
 
 // Tangram mvt.cpp fixes the winding direction for outer ring from the first polygon in the tile, rather
 //  than using the MVT spec of positive signed area or using the winding of the first ring of each
@@ -465,19 +457,18 @@ void TileBuilder::loadAreaFeature()
   // geodesk area computes area in mercator meters, then scales based on latitude; tilemaker uses
   //  boost::geometry to calculate exact area on spherical surface; we just use mercator meters since
   //  this is what Tangram expects (and makes sense for determining if feature should be shown on tile)
-  double s = MapProjection::metersPerTileAtZoom(m_id.z);
-  m_area *= s*s;
+  m_area *= squared(MapProjection::metersPerTileAtZoom(m_id.z));
   //double t = Mercator::scale(feature().xy().y); m_area /= (t*t);
 }
 
 void TileBuilder::buildPolygon()
 {
   loadAreaFeature();
-  auto build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
+  auto* build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
   for(vt_polygon& outer : m_featMPoly) {
     bool isouter = true;
     for(vt_linear_ring& ring : outer) {
-      //simplify(ring, simplifyThresh);
+      simplify(ring, simplifyThresh);
       tilePts.reserve(ring.size());
       // note that flipping y will flip the winding direction
       for(auto& p : ring) {
@@ -493,16 +484,7 @@ void TileBuilder::buildPolygon()
       else {
         m_hasGeom = true;
         m_builtPts += tilePts.size();
-
-        if((linearRingArea(ring) < 0) != isouter)
-          LOG("Uhoh");
-
         build->add_ring_from_container(tilePts);
-        //build->add_ring(tilePts.size());
-        //if((polygonArea(ring) < 0) != isouter)
-        //  set_points(*build, tilePts.rbegin(), tilePts.rend());
-        //else
-        //  set_points(*build, tilePts.begin(), tilePts.end());
       }
       isouter = false;  // any additional rings in this polygon are inner rings
       tilePts.clear();

@@ -154,7 +154,7 @@ void AscendTileBuilder::ProcessNode()
 
   // many smaller airports only have aerodrome node instead of way
   auto aeroway = Find("aeroway");
-  if (aeroway == "aerodrome") {
+  if (aeroway && aeroway == "aerodrome") {
     if (!MinZoom(11)) { return; }
     Layer("transportation", false);  //"aeroway"
     Attribute("aeroway", aeroway);
@@ -168,12 +168,10 @@ void AscendTileBuilder::ProcessNode()
     return;
   }
 
-  // Write 'poi'
-  NewWritePOI();
-
   // Write 'mountain_peak' and 'water_name'
   auto natural = Find("natural");
-  if (natural == "peak" || natural == "volcano") {
+  if (!natural) {}
+  else if (natural == "peak" || natural == "volcano") {
     if (!MinZoom(11)) { return; }
     Layer("poi", false);
     SetNameAttributes();
@@ -182,13 +180,14 @@ void AscendTileBuilder::ProcessNode()
     Attribute("natural", natural);
     return;
   }
-
-  if (natural == "bay") {
+  else if (natural == "bay") {
     if (!MinZoom(8)) { return; }
     Layer("water", false);
     SetNameAttributes();  //14);
     return;
   }
+
+  NewWritePOI();
 }
 
 // default zoom for including labels is 14; use | <zoom>_z to override
@@ -700,13 +699,11 @@ void AscendTileBuilder::SetBrunnelAttributes()
   else if (Find("ford") == "yes") { Attribute("brunnel", "ford"); }
 }
 
-constexpr double SQ(double x) { return x*x; }
-
 // Set minimum zoom level by area
 bool AscendTileBuilder::SetMinZoomByArea(double area)
 {
   if (MinZoom(14)) { return true; }  // skip area calc for highest zoom
-  double minarea = SQ(MapProjection::metersPerTileAtZoom(m_id.z - 1)/256.0);
+  double minarea = squared(MapProjection::metersPerTileAtZoom(m_id.z - 1)/256.0);
   if (area > 0) { return area >= minarea; }
   // bbox area sets upper limit on feature area
   if (feature().ptr().bounds().area() < minarea) { return false; }
