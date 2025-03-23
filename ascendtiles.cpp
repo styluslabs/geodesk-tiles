@@ -26,6 +26,7 @@ public:
   void SetNameAttributes(int minz = 0);
   void SetIdAttributes();
   bool NewWritePOI(double area = 0, bool force = false);
+  void WriteAerodromePOI();
 };
 
 std::string buildTile(const Features& world, const Features& ocean, TileID id)
@@ -102,7 +103,7 @@ void AscendTileBuilder::processFeature()
 {
   if(!m_feat) {  // building ocean polygon?
     Layer("water", true);
-    Attribute("class", "ocean");
+    Attribute("water", "ocean");
   }
   else if (feature().isWay()) { ProcessWay(); }
   else if (feature().isNode()) { ProcessNode(); }
@@ -111,10 +112,6 @@ void AscendTileBuilder::processFeature()
   //else { LOG("Unknown feature type!"); }
 }
 
-
-static const auto aerodromeValues = Set { "international", "public", "regional", "military", "private" };
-
-//node_keys = { "addr:housenumber","aerialway","aeroway","amenity","barrier","highway","historic","leisure","natural","office","place","railway","shop","sport","tourism","waterway" }
 void AscendTileBuilder::ProcessNode()
 {
   // Write 'place'
@@ -139,7 +136,7 @@ void AscendTileBuilder::ProcessNode()
     if (!MinZoom(mz)) { return; }
 
     Layer("place", false);
-    Attribute("class", place);
+    //Attribute("class", place);
     Attribute("place", place);
     //if (rank > 0) { AttributeNumeric("rank", rank); }
     if (pop > 0) { AttributeNumeric("population", pop); }
@@ -155,16 +152,7 @@ void AscendTileBuilder::ProcessNode()
   // many smaller airports only have aerodrome node instead of way
   auto aeroway = Find("aeroway");
   if (aeroway && aeroway == "aerodrome") {
-    if (!MinZoom(11)) { return; }
-    Layer("transportation", false);  //"aeroway"
-    Attribute("aeroway", aeroway);
-    Attribute("ref", Find("ref"));
-    SetNameAttributes();
-    SetEleAttributes();
-    Attribute("iata", Find("iata"));
-    Attribute("icao", Find("icao"));
-    auto aerodrome = Find("aerodrome");
-    Attribute("aerodrome", aerodromeValues[aerodrome] ? std::string(aerodrome) : "other");
+    if (MinZoom(11)) { WriteAerodromePOI(); }
     return;
   }
 
@@ -215,7 +203,7 @@ static const auto naturalAreas = Set { "wood", "grassland", "grass", "scrub", "f
     "glacier", "beach", "sand", "bare_rock", "scree" };
 static const auto leisureAreas = Set { "pitch", "park", "garden", "playground", "golf_course", "stadium" };
 static const auto amenityAreas = Set { "school", "university", "kindergarten", "college", "library",
-    "hospital", "bus_station", "marketplace" };
+    "hospital", "bus_station", "marketplace", "research_institute" };
 static const auto tourismAreas = Set { "zoo", "theme_park", "aquarium" };
 
 static const auto waterwayClasses = Set { "stream", "river", "canal", "drain", "ditch" };
@@ -225,6 +213,7 @@ static const auto noNameWater     = Set { "river", "basin", "wastewater", "canal
 static const auto manMadeClasses  = Set { "pier", "breakwater", "groyne" };  // "storage_tank", "water_tap", "dyke", "lighthouse"
 static const auto aerowayClasses  = Set { "taxiway", "hangar", "runway", "helipad", "aerodrome", "airstrip", "tower" };
 static const auto aerowayBuildings = Set { "terminal", "gate", "tower" };
+//static const auto aerodromeValues = Set { "international", "public", "regional", "military", "private" };
 
 static const ZMap transitRoutes =
     { {"train", 8}, {"subway", 10}, {"tram", 12}, {"share_taxi", 12}, {"light_rail", 12}, {"bus", 14}, {"trolleybus", 14} };
@@ -251,7 +240,7 @@ void AscendTileBuilder::ProcessRelation()
     } else {
       return;
     }
-    Attribute("class", "route");
+    //Attribute("class", "route");
     Attribute("route", route);
     Attribute("name", Find("name"));
     Attribute("ref", Find("ref"));
@@ -273,7 +262,7 @@ void AscendTileBuilder::ProcessRelation()
     // tilemaker doesn't calculate area for relations
     auto area = Area();
     Layer("landuse", true);
-    Attribute("class", boundary);
+    //Attribute("class", boundary);
     Attribute("boundary", boundary);
     Attribute("leisure", leisure);
     Attribute("protect_class", protect_class);
@@ -282,7 +271,7 @@ void AscendTileBuilder::ProcessRelation()
     // write POI at centroid
     LayerAsCentroid("poi");
     //MinZoom(8);  //SetMinZoomByArea(rel, area);
-    Attribute("class", boundary);
+    //Attribute("class", boundary);
     Attribute("boundary", boundary);
     Attribute("leisure", leisure);
     Attribute("protect_class", protect_class);
@@ -297,14 +286,15 @@ void AscendTileBuilder::ProcessWay()
   //auto tags = feature().tags();  if(tags.begin() == tags.end()) { return; }  // skip if no tags
   auto building = Find("building");  // over 50% of ways are buildings, so process first
   if (building) {  // != ""
-    if (!MinZoom(13) || !SetMinZoomByArea()) { return; }
-    Layer("building", true);
-    SetBuildingHeightAttributes();
-    if (MinZoom(14)) {
+    if (!MinZoom(12)) { return; }
+    // current stylus-osm.yaml doesn't show any buildings below z14
+    if (MinZoom(14)) {  // SetMinZoomByArea()) {
+      Layer("building", true);
+      SetBuildingHeightAttributes();
       // housenumber is also commonly set on poi nodes, but not very useful w/o at least street name too
-      Attribute("housenumber", Find("addr:housenumber"));  //, 14);
-      NewWritePOI(0, true);
+      Attribute("housenumber", Find("addr:housenumber"));  //if (MinZoom(14)) {  }
     }
+    NewWritePOI(0, MinZoom(14));
     return;
   }
 
@@ -408,7 +398,7 @@ void AscendTileBuilder::ProcessWay()
     auto service = Find("service");
     if (!MinZoom(service ? 12 : 9)) { return; }
     Layer("transportation", false);
-    Attribute("class", "rail");
+    //Attribute("class", "rail");
     Attribute("railway", railway);
     SetBrunnelAttributes();
     SetNameAttributes(14);
@@ -446,24 +436,27 @@ void AscendTileBuilder::ProcessWay()
   if (waterLanduse[landuse]) { waterbody = landuse; }
   else if (waterwayAreas[waterway]) { waterbody = std::string(waterway); }
   else if (leisure == "swimming_pool") { waterbody = std::string(leisure); }
-  else if (natural == "water") { waterbody = std::string(natural); }  // || natural == "bay"  -- bay used for name, not water itself!
+  else if (natural == "water") { waterbody = std::string(natural); }
 
   if (waterbody != "") {
     if (!isClosed || !SetMinZoomByArea() || Find("covered") == "yes") { return; }
-    std::string cls = waterway != "" ? "river" : "lake";
-    //if (natural == "bay") { cls = "ocean"; } else if (waterway != "") { cls = "river"; }
-    //if (class == "lake" and Find("wikidata") == "Q192770") { return; }  // crazy lake in Finland
-    //if (cls == "ocean" && isClosed && (AreaIntersecting("ocean")/Area() > 0.98)) { return; }
     auto water = Find("water");
+    if (water) { waterbody = std::string(water); }
+    bool intermittent = Find("intermittent") == "yes";
     Layer("water", true);
-    Attribute("class", cls);
-    Attribute("water", water != "" ? std::string(water) : waterbody);
+    Attribute("water", waterbody);
 
-    if (Find("intermittent") == "yes") { AttributeNumeric("intermittent", 1); }
+    if (intermittent) { AttributeNumeric("intermittent", 1); }
     // don't include names for minor man-made basins (e.g. way 25958687) or rivers, which have name on waterway way
     if (Holds("name") && natural == "water" && !noNameWater[water]) {
-      SetNameAttributes(14);
+      SetNameAttributes();  //14);  -- minzoom was broken in tilemaker script!
       AttributeNumeric("area", Area());
+      // point for name
+      LayerAsCentroid("water");
+      Attribute("water", waterbody);
+      SetNameAttributes();
+      AttributeNumeric("area", Area());
+      if (intermittent) { AttributeNumeric("intermittent", 1); }
     }
     return;
   }
@@ -473,11 +466,18 @@ void AscendTileBuilder::ProcessWay()
       addCoastline(feature());
       // can also be boundary, so don't return
     }
+    else if (natural == "bay") {
+      if (!MinZoom(8)) { return; }
+      LayerAsCentroid("water");
+      SetNameAttributes();
+      AttributeNumeric("area", Area());
+      return;
+    }
     else if (natural == "valley") {
       // special case since valleys are mapped as ways
       auto len = Length();
-      Layer("landuse", false);
       SetMinZoomByArea(len*len);
+      Layer("landuse", false);
       Attribute("natural", natural);
       SetNameAttributes();
       return;
@@ -492,7 +492,7 @@ void AscendTileBuilder::ProcessWay()
     if (Find("protection_title") == "National Forest"
         && Find("operator") == "United States Forest Service") { return; }  // too many
     Layer("landuse", true);
-    Attribute("class", park_boundary ? boundary : leisure);
+    //Attribute("class", park_boundary ? boundary : leisure);
     if (park_boundary) { Attribute("boundary", boundary); }
     Attribute("leisure", leisure);
     Attribute("protect_class", Find("protect_class"));
@@ -535,7 +535,7 @@ void AscendTileBuilder::ProcessWay()
     if(!SetMinZoomByArea()) { return; }
     Layer("landuse", isClosed);
     //SetZOrder(way);
-    Attribute("class", man_made);
+    //Attribute("class", man_made);
     Attribute("man_made", man_made);
     return;
   }
@@ -558,7 +558,7 @@ void AscendTileBuilder::ProcessWay()
   if (piste_diff) {  // != "") {
     if (!MinZoom(10)) { return; }
     Layer("transportation", isClosed);
-    Attribute("class", "piste");
+    //Attribute("class", "piste");
     Attribute("route", "piste");
     Attribute("difficulty", piste_diff);
     Attribute("piste_type", Find("piste:type"));
@@ -571,7 +571,7 @@ void AscendTileBuilder::ProcessWay()
   if (aerialway) {  // != "") {
     if (!MinZoom(10)) { return; }
     Layer("transportation", false);
-    Attribute("class", "aerialway");
+    //Attribute("class", "aerialway");
     Attribute("aerialway", aerialway);
     SetNameAttributes(14);
     return;
@@ -590,17 +590,9 @@ void AscendTileBuilder::ProcessWay()
     if (!MinZoom(10)) { return; }
     Layer("transportation", isClosed);  //"aeroway"
     Attribute("aeroway", aeroway);
-    Attribute("ref", Find("ref"));
-    //write_name = true
     if (aeroway == "aerodrome") {
-      //LayerAsCentroid("aerodrome_label");
-      SetNameAttributes();
-      SetEleAttributes();
-      Attribute("iata", Find("iata"));
-      Attribute("icao", Find("icao"));
-      auto aerodrome = Find("aerodrome");
-      Attribute("aerodrome", aerodromeValues[aerodrome] ? std::string(aerodrome) : "other");
-      AttributeNumeric("area", Area());
+      Attribute("aerodrome", Find("aerodrome"));
+      WriteAerodromePOI();
     }
     return;
   }
@@ -635,16 +627,18 @@ static const std::vector<ZMap> poiTags = {
   ZMap("waterway").add(14, { "dock" })
 };
 
-static const std::vector<ZMap> extraPoiTags =
-    { ZMap("cuisine"), ZMap("station"), ZMap("religion"), ZMap("operator"), ZMap("archaeological_site") };  // atm:operator
+static const std::vector<ZMap> extraPoiTags = { ZMap("cuisine"), ZMap("station"), ZMap("religion"),
+    ZMap("operator"), ZMap("archaeological_site"), ZMap("ref") };  // atm.operator; subway_entrance.ref
 
 bool AscendTileBuilder::NewWritePOI(double area, bool force)
 {
   if(!MinZoom(12)) { return false; }  // no POIs below z12
 
+  bool wikipedia = Holds("wikipedia");
+  bool wikidata = Holds("wikidata");
   bool writepoi = force && Holds("name");
   if(!writepoi) {
-    bool force12 = area > 0 || Holds("wikipedia");
+    bool force12 = area > 0 || wikipedia || wikidata;
     for (const ZMap& z : poiTags) {
       auto val = readTag(z.tagCode());
       if (bool(val) && (force12 || MinZoom(z[val]))) { writepoi = true; break; }
@@ -656,6 +650,9 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
   SetNameAttributes();
   SetIdAttributes();
   if (area > 0) { AttributeNumeric("area", area); }
+  // actual wikipedia/wikidata ref not useful w/o internet access, in which case we can just get from OSM
+  if (wikipedia) { AttributeNumeric("wikipedia", 1); }
+  else if (wikidata) { AttributeNumeric("wikidata", 1); }
   // write value for all tags in poiTags (if present)
   for(const ZMap& y : poiTags) { Attribute(y.tag(), readTag(y.tagCode())); }
   for(auto& s : extraPoiTags) { Attribute(s.tag(), readTag(s.tagCode())); }
@@ -737,6 +734,21 @@ void AscendTileBuilder::SetBuildingHeightAttributes()
 
   if(height > 0) { AttributeNumeric("height", height); }
   if(minHeight > 0) { AttributeNumeric("min_height", minHeight); }
+}
+
+void AscendTileBuilder::WriteAerodromePOI()
+{
+  LayerAsCentroid("transportation");
+  Attribute("aeroway", "aerodrome");
+  Attribute("aerodrome", Find("aerodrome"));
+  SetNameAttributes();
+  SetEleAttributes();
+  SetIdAttributes();
+  Attribute("iata", Find("iata"));
+  Attribute("icao", Find("icao"));
+  Attribute("ref", Find("ref"));  // think this is rare
+  auto area = Area();
+  if (area > 0) { AttributeNumeric("area", area); }
 }
 
 void AscendTileBuilder::WriteBoundary()

@@ -389,7 +389,7 @@ void TileBuilder::buildLine(Feature& way)
 }
 
 template<class T>
-double TileBuilder::addRing(vt_polygon& poly, T&& iter)
+void TileBuilder::addRing(vt_polygon& poly, T&& iter, bool outer)
 {
   int n = iter.coordinatesRemaining();
   vt_linear_ring& ring = poly.emplace_back();
@@ -401,16 +401,29 @@ double TileBuilder::addRing(vt_polygon& poly, T&& iter)
     pmin = min(p, pmin);
     pmax = max(p, pmax);
   }
-  // we want area of whole feature, before clipping
-  real area = linearRingArea(ring);
+  // we want area and centroid of the whole feature, before clipping
+  double area = 0;
+  dvec2 centroid(0,0);
+  // we assume first and last points of ring are the same
+  for(size_t ii = 0; ii+1 < ring.size(); ++ii) {
+    double a = ring[ii].x * ring[ii+1].y - ring[ii+1].x * ring[ii].y;
+    area += a;
+    centroid += a * dvec2(ring[ii].x + ring[ii+1].x, ring[ii].y + ring[ii+1].y);
+  }
+
   if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { ring.clear(); }
   else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
     clipper<0> xclip{0,1};
     clipper<1> yclip{0,1};
     ring = yclip(xclip(ring));
   }
+
+  // note that sign of area will be reversed by y flip of tile coords
+  bool rev = (area > 0) == outer;
+  if(rev) { std::reverse(ring.begin(), ring.end()); }
+  m_area += rev ? area/2 : -area/2;
+  m_centroid += rev ? centroid : -centroid;
   // wait until feature is accepted to simplify (which is a bit slow)
-  return area;
 }
 
 // Tangram mvt.cpp fixes the winding direction for outer ring from the first polygon in the tile, rather
@@ -421,39 +434,35 @@ void TileBuilder::loadAreaFeature()
 {
   if(!std::isnan(m_area)) { return; }  // already loaded?
 
+  m_area = 0;
+  m_centroid = {0,0};
   if(feature().isWay()) {
     vt_polygon& poly = m_featMPoly.emplace_back();
-    // note that sign of area will be reversed when y flip of tile coords
-    double area = addRing(poly, WayCoordinateIterator(WayPtr(feature().ptr())));
+    addRing(poly, WayCoordinateIterator(WayPtr(feature().ptr())), true);
     if(poly.back().empty()) { m_featMPoly.pop_back(); }
-    else if(area > 0) { std::reverse(poly.back().begin(), poly.back().end()); }
-    m_area = std::abs(area);
   }
   else {
-    m_area = 0;
     Polygonizer polygonizer;
     polygonizer.createRings(feature().store(), RelationPtr(feature().ptr()));
     polygonizer.assignAndMergeHoles();
     const Polygonizer::Ring* outer = polygonizer.outerRings();
     while(outer) {
       vt_polygon& poly = m_featMPoly.emplace_back();
-      double area = addRing(poly, RingCoordinateIterator(outer));
-      if(area > 0) { std::reverse(poly.back().begin(), poly.back().end()); }
-      m_area += std::abs(area);
+      addRing(poly, RingCoordinateIterator(outer), true);
       const Polygonizer::Ring* inner = outer->firstInner();
       while(inner) {
-        area = addRing(poly, RingCoordinateIterator(inner));
+        addRing(poly, RingCoordinateIterator(inner), false);
         if(poly.back().empty()) { poly.pop_back(); }
-        else if(area < 0) { std::reverse(poly.back().begin(), poly.back().end()); }
-        m_area -= std::abs(area);
         inner = inner->next();
       }
       if(poly.front().empty()) { m_featMPoly.pop_back(); }  // remove whole polygon if outer empty
       outer = outer->next();
     }
   }
+  // centroid in tile units
+  m_centroid *= 1/(6*m_area);
 
-  // tile units^2 to mercator meters^2
+  // area: convert from tile units^2 to mercator meters^2
   // geodesk area computes area in mercator meters, then scales based on latitude; tilemaker uses
   //  boost::geometry to calculate exact area on spherical surface; we just use mercator meters since
   //  this is what Tangram expects (and makes sense for determining if feature should be shown on tile)
@@ -530,14 +539,17 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
     buildCoastline();
   }
   else if(feature().isNode() || _centroid) {
-    vt_point p(-1, -1);  //= toTileCoord(_centroid ? feature().centroid() : feature().xy());
+    vt_point p(-1, -1);
     if(feature().isArea()) {
       loadAreaFeature();
-      if(m_featMPoly.size() > 1)
-        LOGD("Requested centroid for multipolygon feature %s", Id().c_str());
+      p = vt_point(m_centroid);
+      // we must use unclipped geometry to get label so position is the same at all zoom levels
+      /*
+      // if centroid lies in this tile and only one polygon, use polylabel to get better label pos
       // m_featMPoly already in tile coords; 1/256 precision for geometry in normalized tile coords
-      if(!m_featMPoly.empty())
+      if(p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1 && m_featMPoly.size() == 1)
         p = mapbox::polylabel(m_featMPoly[0], 1/256.0f);
+      */
     }
     else
       p = toTileCoord(feature().centroid());

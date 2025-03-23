@@ -33,9 +33,7 @@ Rebuilding (i.e., running `make`) after schema changes should only take a few se
 
 ## Details ##
 
-At the moment, it is necessary to use a forked libgeodesk with [one small change](https://github.com/clarisma/libgeodesk/pull/6) which hopefully can be merged upstream.
-
-[server.cpp](server.cpp) uses [cpp-httplib](https://github.com/yhirose/cpp-httplib) to provide an HTTP server and sqlite to save generated tiles to an mbtiles file.  Tile builder threads (number set by `--threads` option, currently defaulting to one due to a possible deadlock bug) share a queue to prevent duplicate work.
+[server.cpp](server.cpp) uses [cpp-httplib](https://github.com/yhirose/cpp-httplib) to provide an HTTP server and sqlite to save generated tiles to an mbtiles file.  Tile builder threads (number set by `--threads` option, defaulting to CPU cores minus one) share a queue to prevent duplicate work.
 
 Simple Cohen–Sutherland clipping is used in [clipper.h](clipper.h); more robust clipping for edge cases should be added in the future.
 

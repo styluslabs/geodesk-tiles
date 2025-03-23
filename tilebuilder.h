@@ -43,6 +43,7 @@ public:
   Feature* m_feat = nullptr;  //std::reference_wrapper<Feature> m_feat;
   vt_multi_polygon m_featMPoly;
   double m_area = NAN;
+  dvec2 m_centroid;
 
   // coord mapping
   dvec2 m_origin;
@@ -99,7 +100,7 @@ public:
   void buildLine(Feature& way);
   vt_multi_line_string loadWayFeature(Feature& way);
   void buildPolygon();
-  template<class T> double addRing(vt_polygon& poly, T&& iter);
+  template<class T> void addRing(vt_polygon& poly, T&& iter, bool outer);
   void loadAreaFeature();
 
   void addCoastline(Feature& way);
