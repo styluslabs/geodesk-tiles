@@ -104,3 +104,25 @@ inline ThreadPool::~ThreadPool()
   for(std::thread &worker: workers)
     worker.join();
 }
+
+// fstring
+
+inline std::string fstring(const char* fmt, ...)
+{
+  char buf[512];
+  buf[0] = '\0';
+  va_list va, va2;
+  va_start(va, fmt);
+  va_copy(va2, va);
+  int n = vsnprintf(buf, 512, fmt, va);
+  std::string str;
+  if(n < 512)
+    str = buf;
+  else {
+    str.resize(n);
+    vsnprintf(&str[0], n+1, fmt, va2);
+  }
+  va_end(va2);
+  va_end(va);
+  return str;
+}

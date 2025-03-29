@@ -1,6 +1,5 @@
 // Serve tiles from multiple mbtiles files, generating missing tiles on demand
 
-#include <format>
 #include <map>
 #include "tilebuilder.h"
 #define SQLITEPP_LOGE LOG
@@ -171,7 +170,8 @@ Optional arguments:
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
     auto t1 = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(t1 - time0).count();
-    auto statstr = std::format("Uptime: {:.0f} s\nReqs: {}\n200 Reqs: {}\nBytes out: {}\n",
+    // std::format not available in g++12!
+    auto statstr = fstring("Uptime: %.0f s\nReqs: %lu\nReqs OK: %lu\nBytes out: %lu\n",
         dt, stats.reqs.load(), stats.reqsok.load(), stats.bytesout.load());
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
