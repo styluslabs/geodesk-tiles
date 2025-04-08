@@ -269,15 +269,9 @@ void AscendTileBuilder::ProcessRelation()
     SetNameAttributes();
     AttributeNumeric("area", area);
     // write POI at centroid
-    LayerAsCentroid("poi");
-    //MinZoom(8);  //SetMinZoomByArea(rel, area);
-    //Attribute("class", boundary);
+    NewWritePOI(area, true);
     Attribute("boundary", boundary);
-    Attribute("leisure", leisure);
     Attribute("protect_class", protect_class);
-    SetNameAttributes();
-    SetIdAttributes();
-    AttributeNumeric("area", area);
   }
 }
 
@@ -496,8 +490,10 @@ void AscendTileBuilder::ProcessWay()
     if (park_boundary) { Attribute("boundary", boundary); }
     Attribute("leisure", leisure);
     Attribute("protect_class", Find("protect_class"));
-    SetNameAttributes();
-    NewWritePOI(Area(), MinZoom(14));
+    SetNameAttributes();  // in case we want to display name on boundary itself
+    NewWritePOI(Area(), true);  //MinZoom(14));
+    if (park_boundary) { Attribute("boundary", boundary); }
+    Attribute("protect_class", Find("protect_class"));
   }
 
   // Boundaries ... possible for way to be shared with park boundary or landuse?
@@ -515,15 +511,14 @@ void AscendTileBuilder::ProcessWay()
   if (landuseAreas[landuse] || naturalAreas[natural] || leisureAreas[leisure] || amenityAreas[amenity] || tourismAreas[tourism]) {
     if (!SetMinZoomByArea()) { return; }
     Layer("landuse", true);
-    //Attribute("class", landuseKeys[l]);
-    //if (landuse == "residential" and Area()<ZRES8) { MinZoom(8); } else { SetMinZoomByArea(way); }
     Attribute("landuse", landuse);
     Attribute("natural", natural);
     Attribute("leisure", leisure);
     Attribute("amenity", amenity);
     Attribute("tourism", tourism);
     if (natural == "wetland") { Attribute("wetland", Find("wetland")); }
-    NewWritePOI(Area(), MinZoom(14));
+    AttributeNumeric("area", Area());  // area is used to order smaller areas over larger areas
+    NewWritePOI(Area(), true);  //MinZoom(14));
     return;
   }
 
@@ -632,7 +627,7 @@ static const std::vector<ZMap> extraPoiTags = { ZMap("cuisine"), ZMap("station")
 
 bool AscendTileBuilder::NewWritePOI(double area, bool force)
 {
-  if(!MinZoom(12)) { return false; }  // no POIs below z12
+  if(!MinZoom(12) && area <= 0) { return false; }  // no POIs below z12
 
   bool wikipedia = Holds("wikipedia");
   bool wikidata = Holds("wikidata");

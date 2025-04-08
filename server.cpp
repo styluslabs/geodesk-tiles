@@ -177,7 +177,7 @@ Optional arguments:
     return httplib::StatusCode::OK_200;
   });
 
-  svr.Get("/tiles/:z/:x/:y", [&](const httplib::Request& req, httplib::Response& res) {
+  svr.Get("/v1/:z/:x/:y", [&](const httplib::Request& req, httplib::Response& res) {
     LOGD("Request %s\n", req.path.c_str());
     ++stats.reqs;
     const char* zstr = req.path_params.at("z").c_str();
