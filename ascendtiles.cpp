@@ -491,7 +491,7 @@ void AscendTileBuilder::ProcessWay()
     Attribute("leisure", leisure);
     Attribute("protect_class", Find("protect_class"));
     SetNameAttributes();  // in case we want to display name on boundary itself
-    AttributeNumeric("area", area);
+    AttributeNumeric("area", Area());
     NewWritePOI(Area(), true);  //MinZoom(14));
     if (park_boundary) { Attribute("boundary", boundary); }
     Attribute("protect_class", Find("protect_class"));
