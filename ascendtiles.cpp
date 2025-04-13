@@ -491,6 +491,7 @@ void AscendTileBuilder::ProcessWay()
     Attribute("leisure", leisure);
     Attribute("protect_class", Find("protect_class"));
     SetNameAttributes();  // in case we want to display name on boundary itself
+    AttributeNumeric("area", area);
     NewWritePOI(Area(), true);  //MinZoom(14));
     if (park_boundary) { Attribute("boundary", boundary); }
     Attribute("protect_class", Find("protect_class"));
@@ -590,6 +591,11 @@ void AscendTileBuilder::ProcessWay()
       WriteAerodromePOI();
     }
     return;
+  }
+
+  // use leisure/amenity/tourismArea above instead to include the area itself
+  if (isClosed) {
+    NewWritePOI();
   }
 }
 
