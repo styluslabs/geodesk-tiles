@@ -27,6 +27,7 @@ public:
   void SetIdAttributes();
   bool NewWritePOI(double area = 0, bool force = false);
   void WriteAerodromePOI();
+  void WriteProtectedArea();
 };
 
 std::string buildTile(const Features& world, const Features& ocean, TileID id)
@@ -257,21 +258,7 @@ void AscendTileBuilder::ProcessRelation()
     }
     if (!parkValues[boundary] || !MinZoom(8)) { return; }   //SetMinZoomByArea(rel, area);
     if (Find("maritime") == "yes") { return; }  // marine sanctuaries not really useful for typical use
-    auto leisure = Find("leisure");
-    auto protect_class = Find("protect_class");
-    // tilemaker doesn't calculate area for relations
-    auto area = Area();
-    Layer("landuse", true);
-    //Attribute("class", boundary);
-    Attribute("boundary", boundary);
-    Attribute("leisure", leisure);
-    Attribute("protect_class", protect_class);
-    SetNameAttributes();
-    AttributeNumeric("area", area);
-    // write POI at centroid
-    NewWritePOI(area, true);
-    Attribute("boundary", boundary);
-    Attribute("protect_class", protect_class);
+    WriteProtectedArea();
   }
 }
 
@@ -482,19 +469,7 @@ void AscendTileBuilder::ProcessWay()
   // Parks ... possible for way to be both park boundary and landuse?
   bool park_boundary = parkValues[boundary];
   if (park_boundary || leisure == "nature_reserve") {
-    if (!SetMinZoomByArea()) { return; }
-    if (Find("protection_title") == "National Forest"
-        && Find("operator") == "United States Forest Service") { return; }  // too many
-    Layer("landuse", true);
-    //Attribute("class", park_boundary ? boundary : leisure);
-    if (park_boundary) { Attribute("boundary", boundary); }
-    Attribute("leisure", leisure);
-    Attribute("protect_class", Find("protect_class"));
-    SetNameAttributes();  // in case we want to display name on boundary itself
-    AttributeNumeric("area", Area());
-    NewWritePOI(Area(), true);  //MinZoom(14));
-    if (park_boundary) { Attribute("boundary", boundary); }
-    Attribute("protect_class", Find("protect_class"));
+    WriteProtectedArea();
   }
 
   // Boundaries ... possible for way to be shared with park boundary or landuse?
@@ -750,6 +725,28 @@ void AscendTileBuilder::WriteAerodromePOI()
   Attribute("ref", Find("ref"));  // think this is rare
   auto area = Area();
   if (area > 0) { AttributeNumeric("area", area); }
+}
+
+void AscendTileBuilder::WriteProtectedArea()
+{
+  if (!SetMinZoomByArea()) { return; }
+  if (Find("protection_title") == "National Forest"
+      && Find("operator") == "United States Forest Service") { return; }  // too many
+  auto boundary = Find("boundary");
+  auto leisure = Find("leisure");
+  auto protect_class = Find("protect_class");
+  Layer("landuse", true);
+  //Attribute("class", boundary);
+  Attribute("boundary", boundary);
+  Attribute("leisure", leisure);
+  Attribute("protect_class", protect_class);
+  SetNameAttributes();
+  SetIdAttributes();
+  AttributeNumeric("area", Area());
+  // write POI at centroid
+  NewWritePOI(Area(), true);
+  Attribute("boundary", boundary);
+  Attribute("protect_class", protect_class);
 }
 
 void AscendTileBuilder::WriteBoundary()
