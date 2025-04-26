@@ -444,6 +444,9 @@ void AscendTileBuilder::ProcessWay()
 
   if (natural) {
     if (natural == "coastline") {
+      // errant coastlines can improperly fill whole tile with ocean, so manually check
+      int64_t id = feature().id();
+      if (id == 1223379640 || id == 1283812165) { return; }  // fixed in OSM on 15 Apr 2025
       addCoastline(feature());
       // can also be boundary, so don't return
     }
@@ -773,6 +776,7 @@ void AscendTileBuilder::WriteBoundary()
     if (maritime) { Attribute("maritime", "yes"); }
     if (disputed) { Attribute("disputed", "yes"); }
   }
+#ifndef DISABLE_RELATIONS
   else {
     // get name from relation
     std::string name = Find("name");
@@ -796,4 +800,5 @@ void AscendTileBuilder::WriteBoundary()
       }
     }
   }
+#endif
 }
