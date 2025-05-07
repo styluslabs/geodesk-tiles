@@ -56,6 +56,7 @@ void TileBuilder::setFeature(Feature& feat)
   m_feat = &feat;
   m_area = NAN;
   m_featMPoly.clear();
+  m_featId = feat.id();  // save id for debugging
 }
 
 std::string TileBuilder::build(const Features& world, const Features& ocean, bool compress)

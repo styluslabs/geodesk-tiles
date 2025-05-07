@@ -37,7 +37,7 @@ std::string buildTile(const Features& world, const Features& ocean, TileID id)
     return tileBuilder.build(world, ocean);
   }
   catch(std::exception &e) {
-    int64_t fid = tileBuilder.m_feat ? tileBuilder.feature().id() : -1;
+    int64_t fid = tileBuilder.m_feat ? tileBuilder.m_featId : -1;  //tileBuilder.feature().id() : -1;
     LOG("Exception building tile %s (feature id %ld): %s", id.toString().c_str(), fid, e.what());
     return "";
   }

@@ -44,6 +44,7 @@ public:
 
   // current feature
   Feature* m_feat = nullptr;  //std::reference_wrapper<Feature> m_feat;
+  int64_t m_featId = -1;
   vt_multi_polygon m_featMPoly;
   double m_area = NAN;
   dvec2 m_centroid;
