@@ -392,7 +392,8 @@ void AscendTileBuilder::ProcessWay()
   std::string landuse = Find("landuse");
 
   // waterway is single way indicating course of a waterway - wide rivers, etc. have additional polygons to map area
-  if (waterwayClasses[waterway] && !isClosed) {
+  if (!waterway) {}
+  else if (waterwayClasses[waterway] && !isClosed) {
     bool namedriver = waterway == "river" && Holds("name");
     if (!MinZoom(namedriver ? 8 : 12)) { return; }
     Layer("water", false);  //waterway , waterway_detail
@@ -603,7 +604,7 @@ static const std::vector<ZMap> poiTags = {
       "cycle_barrier", "gate", "lift_gate", "sally_port", "stile", "toll_booth" }),
   ZMap("building").add(14, { "dormitory" }),
   ZMap("aerialway").add(14, { "station" }),
-  ZMap("waterway").add(14, { "dock" })
+  ZMap("waterway").add(13, { "waterfall" }).add(14, { "dock" })
 };
 
 static const std::vector<ZMap> extraPoiTags = { ZMap("cuisine"), ZMap("station"), ZMap("religion"),

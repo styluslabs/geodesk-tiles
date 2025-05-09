@@ -149,17 +149,18 @@ static void simplifyRDP(std::vector<vt_point>& pts, std::vector<int>& keep, int 
   simplifyRDP(pts, keep, argmax, end, thresh);
 }
 
-static void simplify(std::vector<vt_point>& pts, real thresh)
+static std::vector<int> simplify(std::vector<vt_point>& pts, real thresh)
 {
-  if(thresh <= 0 || pts.size() < 3) { return; }
+  if(thresh <= 0 || pts.size() < 3) { return {}; }
   std::vector<int> keep(pts.size(), 0);
   keep.front() = 1;  keep.back() = 1;
   simplifyRDP(pts, keep, 0, pts.size() - 1, thresh);
-  size_t dst = 0;
-  for(size_t src = 0; src < pts.size(); ++src) {
-    if(keep[src]) { pts[dst++] = pts[src]; }
-  }
-  pts.resize(dst);
+  return keep;
+  //size_t dst = 0;
+  //for(size_t src = 0; src < pts.size(); ++src) {
+  //  if(keep[src]) { pts[dst++] = pts[src]; }
+  //}
+  //pts.resize(dst);
 }
 
 // from ulib/geom.cpp
@@ -187,6 +188,20 @@ bool pointInPolygon(const std::vector<T>& poly, T p)
 // convert to relative tile coord (float 0..1)
 vt_point TileBuilder::toTileCoord(Coordinate r) {
   return vt_point(m_scale*(dvec2(r.x, r.y) - m_origin));  // + 0.5);
+}
+
+// simplify and write to TileBuilder.tilePts as MVT coord (i32 0..tileExtent)
+const std::vector<i32vec2>& TileBuilder::toTilePts(std::vector<vt_point>& pts)
+{
+  auto keep = simplify(pts, simplifyThresh);
+  m_tilePts.clear();
+  m_tilePts.reserve(pts.size());
+  for(size_t ii = 0; ii < pts.size(); ++ii) {
+    if(!keep.empty() && !keep[ii]) { continue; }
+    auto ip = i32vec2(pts[ii].x*tileExtent + 0.5f, (1 - pts[ii].y)*tileExtent + 0.5f);
+    if(m_tilePts.empty() || ip != m_tilePts.back()) { m_tilePts.push_back(ip); }
+  }
+  return m_tilePts;
 }
 
 // clockwise distance along tile perimeter from 0,0 to point p
@@ -313,14 +328,7 @@ void TileBuilder::buildCoastline()
   auto build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
   for(vt_polygon& outer : outers) {
     for(vt_linear_ring& ring : outer) {
-      simplify(ring, simplifyThresh);
-      tilePts.reserve(ring.size());
-      // flipping y will flip the winding direction, as desired for MVT convention of CCW outer
-      for(auto it = ring.begin(); it != ring.end(); ++it) {
-        auto ip = i32vec2(it->x*tileExtent + 0.5f, (1 - it->y)*tileExtent + 0.5f);
-        if(tilePts.empty() || ip != tilePts.back())
-          tilePts.push_back(ip);
-      }
+      const auto& tilePts = toTilePts(ring);
       if(tilePts.size() < 4) {}
       else if(tilePts.back() != tilePts.front()) {
         LOGD("Invalid polygon for %s coastline", m_id.toString().c_str());
@@ -330,7 +338,6 @@ void TileBuilder::buildCoastline()
         m_builtPts += tilePts.size();
         build->add_ring_from_container(tilePts);
       }
-      tilePts.clear();
     }
   }
 }
@@ -371,21 +378,12 @@ void TileBuilder::buildLine(Feature& way)
   vt_multi_line_string clipPts = loadWayFeature(way);
   auto* build = static_cast<vtzero::linestring_feature_builder*>(m_build.get());
   for(auto& line : clipPts) {
-    simplify(line, simplifyThresh);
-    // vtzero throws error on duplicate points
-    tilePts.reserve(line.size());
-    for(auto& p : line) {
-      // MVT origin is upper left (NW), whereas geodesk/mercator origin is lower left (SW)
-      auto ip = i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
-      if(tilePts.empty() || ip != tilePts.back())
-        tilePts.push_back(ip);
-    }
+    const auto& tilePts = toTilePts(line);
     if(tilePts.size() > 1) {
       m_hasGeom = true;
       m_builtPts += tilePts.size();
       build->add_linestring_from_container(tilePts);
     }  //else LOG("Why?");
-    tilePts.clear();
   }
 }
 
@@ -478,14 +476,7 @@ void TileBuilder::buildPolygon()
   for(vt_polygon& outer : m_featMPoly) {
     bool isouter = true;
     for(vt_linear_ring& ring : outer) {
-      simplify(ring, simplifyThresh);
-      tilePts.reserve(ring.size());
-      // note that flipping y will flip the winding direction
-      for(auto& p : ring) {
-        auto ip = i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
-        if(tilePts.empty() || ip != tilePts.back())
-          tilePts.push_back(ip);
-      }
+      const auto& tilePts = toTilePts(ring);
       // tiny polygons get simplified to two points and discarded ... calculate area instead?
       if(tilePts.size() < 4) {}
       else if(tilePts.back() != tilePts.front()) {
@@ -497,7 +488,6 @@ void TileBuilder::buildPolygon()
         build->add_ring_from_container(tilePts);
       }
       isouter = false;  // any additional rings in this polygon are inner rings
-      tilePts.clear();
     }
   }
 }

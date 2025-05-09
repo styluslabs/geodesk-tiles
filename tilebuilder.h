@@ -61,7 +61,7 @@ public:
   bool m_hasGeom = false;  // doesn't seem we can get this from vtzero
 
   // temp containers
-  std::vector<i32vec2> tilePts;
+  std::vector<i32vec2> m_tilePts;
 
   // coastline
   vt_multi_line_string m_coastline;
@@ -106,6 +106,7 @@ public:
   void buildPolygon();
   template<class T> void addRing(vt_polygon& poly, T&& iter, bool outer);
   void loadAreaFeature();
+  const std::vector<i32vec2>& toTilePts(std::vector<vt_point>& pts);
 
   void addCoastline(Feature& way);
   void buildCoastline();
