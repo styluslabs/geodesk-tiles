@@ -64,13 +64,14 @@ struct Set {
   bool operator[](const TagValue& key) const { return bool(key) && m_items.find(std::string(key)) != m_items.end(); }
 };
 
+static constexpr int EXCLUDE = 100;
 struct ZMap {
   using map_t = std::unordered_map<std::string, int>;
   std::string m_tag;
   mutable CodedString m_tagCode;  // = {{}, INT_MAX};
   map_t m_items;
-  const int m_dflt = 100;
-  ZMap(std::string_view _tag, int _dflt=100) : m_tag(_tag), m_dflt(_dflt) {}
+  const int m_dflt = EXCLUDE;
+  ZMap(std::string_view _tag, int _dflt=EXCLUDE) : m_tag(_tag), m_dflt(_dflt) {}
   ZMap(std::initializer_list<map_t::value_type> items) : m_items(items) {}
   ZMap& add(int z, std::initializer_list<std::string> items) {
     for(auto& s : items)
@@ -580,7 +581,6 @@ void AscendTileBuilder::ProcessWay()
 
 // POIs: moving toward including all values for key except common unwanted values
 
-static constexpr int EXCLUDE = 100;
 static const std::vector<ZMap> poiTags = {
   // all amenity values with count > 1000 (as of Jan 2024) that we wish to exclude
   ZMap("amenity", 14).add(12, { "bus_station", "ferry_terminal" }).add(EXCLUDE, { "parking_space", "bench",
@@ -617,11 +617,12 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
   bool wikipedia = Holds("wikipedia");
   bool wikidata = Holds("wikidata");
   bool writepoi = force && Holds("name");
-  if(!writepoi) {
+  if (!writepoi) {
     bool force12 = area > 0 || wikipedia || wikidata;
-    for (const ZMap& z : poiTags) {
-      auto val = readTag(z.tagCode());
-      if (bool(val) && (force12 || MinZoom(z[val]))) { writepoi = true; break; }
+    for (const ZMap& kz : poiTags) {
+      auto val = readTag(kz.tagCode());
+      int z = bool(val) ? kz[val] : EXCLUDE;
+      if (z < EXCLUDE && (force12 || MinZoom(z))) { writepoi = true; break; }
     }
   }
   if(!writepoi) { return false; }
@@ -634,8 +635,8 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
   if (wikipedia) { AttributeNumeric("wikipedia", 1); }
   else if (wikidata) { AttributeNumeric("wikidata", 1); }
   // write value for all tags in poiTags (if present)
-  for(const ZMap& y : poiTags) { Attribute(y.tag(), readTag(y.tagCode())); }
-  for(auto& s : extraPoiTags) { Attribute(s.tag(), readTag(s.tagCode())); }
+  for (const ZMap& y : poiTags) { Attribute(y.tag(), readTag(y.tagCode())); }
+  for (auto& s : extraPoiTags) { Attribute(s.tag(), readTag(s.tagCode())); }
   return true;
 }
 

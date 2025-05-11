@@ -130,7 +130,7 @@ static real distToSegment2(vt_point start, vt_point end, vt_point pt)
   return dist2(proj - pt);
 }
 
-static void simplifyRDP(std::vector<vt_point>& pts, std::vector<int>& keep, int start, int end, real thresh)
+static void simplifyRDP(const std::vector<vt_point>& pts, std::vector<int>& keep, int start, int end, real thresh)
 {
   real maxdist2 = 0;
   int argmax = 0;
@@ -149,7 +149,7 @@ static void simplifyRDP(std::vector<vt_point>& pts, std::vector<int>& keep, int 
   simplifyRDP(pts, keep, argmax, end, thresh);
 }
 
-static std::vector<int> simplify(std::vector<vt_point>& pts, real thresh)
+static std::vector<int> simplify(const std::vector<vt_point>& pts, real thresh)
 {
   if(thresh <= 0 || pts.size() < 3) { return {}; }
   std::vector<int> keep(pts.size(), 0);
@@ -191,7 +191,7 @@ vt_point TileBuilder::toTileCoord(Coordinate r) {
 }
 
 // simplify and write to TileBuilder.tilePts as MVT coord (i32 0..tileExtent)
-const std::vector<i32vec2>& TileBuilder::toTilePts(std::vector<vt_point>& pts)
+const std::vector<i32vec2>& TileBuilder::toTilePts(const std::vector<vt_point>& pts)
 {
   auto keep = simplify(pts, simplifyThresh);
   m_tilePts.clear();
@@ -410,12 +410,15 @@ void TileBuilder::addRing(vt_polygon& poly, T&& iter, bool outer)
     centroid += a * dvec2(ring[ii].x + ring[ii+1].x, ring[ii].y + ring[ii+1].y);
   }
 
-  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { ring.clear(); }
-  else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
-    clipper<0> xclip{0,1};
-    clipper<1> yclip{0,1};
-    ring = yclip(xclip(ring));
-  }
+  // defer clipping because we must use unclipped geometry for polylabel so pos is the same at all zoom levels
+  //if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { ring.clear(); }
+  //else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
+  //  clipper<0> xclip{0,1};
+  //  clipper<1> yclip{0,1};
+  //  ring = yclip(xclip(ring));
+  //}
+  m_polyMin = min(m_polyMin, pmin);
+  m_polyMax = max(m_polyMax, pmax);
 
   // note that sign of area will be reversed by y flip of tile coords
   bool rev = (area > 0) == outer;
@@ -435,6 +438,8 @@ void TileBuilder::loadAreaFeature()
 
   m_area = 0;
   m_centroid = {0,0};
+  m_polyMin = vt_point(REAL_MAX, REAL_MAX);
+  m_polyMax = vt_point(-REAL_MAX, -REAL_MAX);
   if(feature().isWay()) {
     vt_polygon& poly = m_featMPoly.emplace_back();
     addRing(poly, WayCoordinateIterator(WayPtr(feature().ptr())), true);
@@ -472,11 +477,15 @@ void TileBuilder::loadAreaFeature()
 void TileBuilder::buildPolygon()
 {
   loadAreaFeature();
+  if(m_polyMin.x > 1 || m_polyMin.y > 1 || m_polyMax.x < 0 || m_polyMax.y < 0) { return; }
+  bool clip = m_polyMin.x < 0 || m_polyMin.y < 0 || m_polyMax.x > 1 || m_polyMax.y > 1;
+  clipper<0> xclip{0,1};
+  clipper<1> yclip{0,1};
   auto* build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
   for(vt_polygon& outer : m_featMPoly) {
     bool isouter = true;
     for(vt_linear_ring& ring : outer) {
-      const auto& tilePts = toTilePts(ring);
+      const auto& tilePts = clip ? toTilePts(yclip(xclip(ring))) : toTilePts(ring);
       // tiny polygons get simplified to two points and discarded ... calculate area instead?
       if(tilePts.size() < 4) {}
       else if(tilePts.back() != tilePts.front()) {
@@ -531,19 +540,22 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
   }
   else if(feature().isNode() || _centroid) {
     vt_point p(-1, -1);
-    if(feature().isArea()) {
+    if(!feature().isArea()) { p = toTileCoord(feature().centroid()); }
+    else {
       loadAreaFeature();
       p = vt_point(m_centroid);
-      // we must use unclipped geometry to get label so position is the same at all zoom levels
-      /*
       // if centroid lies in this tile and only one polygon, use polylabel to get better label pos
-      // m_featMPoly already in tile coords; 1/256 precision for geometry in normalized tile coords
-      if(p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1 && m_featMPoly.size() == 1)
-        p = mapbox::polylabel(m_featMPoly[0], 1/256.0f);
-      */
+      if(p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1 && m_featMPoly.size() == 1) {
+        // m_featMPoly already in tile coords; 1/256 precision for geometry in normalized tile coords
+        vt_point pl = mapbox::polylabel(m_featMPoly[0], 1/256.0f);
+        // only use polylabel if it is in same z14 tile as centroid
+        real zq = std::exp2(14 - m_id.z);
+        if(floor(p*zq) == floor(pl*zq)) { p = pl; }
+        else {
+          LOGD("rejecting polylabel %f,%f for %lld (centroid %f,%f)", pl.x, pl.y, feature().id(), p.x, p.y);
+        }
+      }
     }
-    else
-      p = toTileCoord(feature().centroid());
 
     auto build = std::make_unique<vtzero::point_feature_builder>(layerBuild);
     m_hasGeom = p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1;

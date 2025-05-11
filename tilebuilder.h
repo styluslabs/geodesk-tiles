@@ -48,6 +48,7 @@ public:
   vt_multi_polygon m_featMPoly;
   double m_area = NAN;
   dvec2 m_centroid;
+  vt_point m_polyMin, m_polyMax;
 
   // coord mapping
   dvec2 m_origin;
@@ -106,7 +107,7 @@ public:
   void buildPolygon();
   template<class T> void addRing(vt_polygon& poly, T&& iter, bool outer);
   void loadAreaFeature();
-  const std::vector<i32vec2>& toTilePts(std::vector<vt_point>& pts);
+  const std::vector<i32vec2>& toTilePts(const std::vector<vt_point>& pts);
 
   void addCoastline(Feature& way);
   void buildCoastline();
