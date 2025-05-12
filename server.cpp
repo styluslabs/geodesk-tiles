@@ -171,8 +171,8 @@ Optional arguments:
     auto t1 = std::chrono::steady_clock::now();
     double dt = std::chrono::duration<double>(t1 - time0).count();
     // std::format not available in g++12!
-    auto statstr = fstring("Uptime: %.0f s\nReqs: %lu\nReqs OK: %lu\nBytes out: %lu\n",
-        dt, stats.reqs.load(), stats.reqsok.load(), stats.bytesout.load());
+    auto statstr = fstring("Uptime: %.0f s\nReqs: %lu\nReqs OK: %lu\nTiles built: %lu\nBytes out: %lu\n",
+        dt, stats.reqs.load(), stats.reqsok.load(), stats.tilesbuilt.load(), stats.bytesout.load());
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
   });

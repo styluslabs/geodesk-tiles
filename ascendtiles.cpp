@@ -200,12 +200,12 @@ static const auto boundaryValues = Set { "administrative", "disputed" };
 static const auto parkValues = Set { "protected_area", "national_park" };
 static const auto landuseAreas = Set { "retail", "military", "residential", "commercial", "industrial",
     "railway", "cemetery", "forest", "grass", "allotments", "meadow", "recreation_ground", "village_green",
-    "landfill", "farmland", "farmyard", "orchard", "vineyard", "plant_nursery", "greenhouse_horticulture", "farm" };
+    "landfill", "farmland", "farmyard", "orchard", "vineyard", "plant_nursery", "greenhouse_horticulture", "farm", "quarry" };
 static const auto naturalAreas = Set { "wood", "grassland", "grass", "scrub", "fell", "heath", "wetland",
     "glacier", "beach", "sand", "bare_rock", "scree" };
 static const auto leisureAreas = Set { "pitch", "park", "garden", "playground", "golf_course", "stadium" };
 static const auto amenityAreas = Set { "school", "university", "kindergarten", "college", "library",
-    "hospital", "bus_station", "marketplace", "research_institute" };
+    "hospital", "bus_station", "marketplace", "research_institute", "prison" };
 static const auto tourismAreas = Set { "zoo", "theme_park", "aquarium" };
 
 static const auto waterwayClasses = Set { "stream", "river", "canal", "drain", "ditch" };

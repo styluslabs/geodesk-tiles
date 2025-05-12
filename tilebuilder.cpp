@@ -410,13 +410,12 @@ void TileBuilder::addRing(vt_polygon& poly, T&& iter, bool outer)
     centroid += a * dvec2(ring[ii].x + ring[ii+1].x, ring[ii].y + ring[ii+1].y);
   }
 
-  // defer clipping because we must use unclipped geometry for polylabel so pos is the same at all zoom levels
-  //if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { ring.clear(); }
-  //else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
-  //  clipper<0> xclip{0,1};
-  //  clipper<1> yclip{0,1};
-  //  ring = yclip(xclip(ring));
-  //}
+  if(pmin.x > 1 || pmin.y > 1 || pmax.x < 0 || pmax.y < 0) { ring.clear(); }
+  else if(pmin.x < 0 || pmin.y < 0 || pmax.x > 1 || pmax.y > 1) {
+    clipper<0> xclip{0,1};
+    clipper<1> yclip{0,1};
+    ring = yclip(xclip(ring));
+  }
   m_polyMin = min(m_polyMin, pmin);
   m_polyMax = max(m_polyMax, pmax);
 
@@ -443,7 +442,7 @@ void TileBuilder::loadAreaFeature()
   if(feature().isWay()) {
     vt_polygon& poly = m_featMPoly.emplace_back();
     addRing(poly, WayCoordinateIterator(WayPtr(feature().ptr())), true);
-    if(poly.back().empty()) { m_featMPoly.pop_back(); }
+    //if(poly.back().empty()) { m_featMPoly.pop_back(); }
   }
   else {
     Polygonizer polygonizer;
@@ -459,7 +458,7 @@ void TileBuilder::loadAreaFeature()
         if(poly.back().empty()) { poly.pop_back(); }
         inner = inner->next();
       }
-      if(poly.front().empty()) { m_featMPoly.pop_back(); }  // remove whole polygon if outer empty
+      //if(poly.front().empty()) { m_featMPoly.pop_back(); }  // remove whole polygon if outer empty
       outer = outer->next();
     }
   }
@@ -477,19 +476,16 @@ void TileBuilder::loadAreaFeature()
 void TileBuilder::buildPolygon()
 {
   loadAreaFeature();
-  if(m_polyMin.x > 1 || m_polyMin.y > 1 || m_polyMax.x < 0 || m_polyMax.y < 0) { return; }
-  bool clip = m_polyMin.x < 0 || m_polyMin.y < 0 || m_polyMax.x > 1 || m_polyMax.y > 1;
-  clipper<0> xclip{0,1};
-  clipper<1> yclip{0,1};
   auto* build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
-  for(vt_polygon& outer : m_featMPoly) {
+  for(vt_polygon& poly : m_featMPoly) {
+    if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
     bool isouter = true;
-    for(vt_linear_ring& ring : outer) {
-      const auto& tilePts = clip ? toTilePts(yclip(xclip(ring))) : toTilePts(ring);
+    for(vt_linear_ring& ring : poly) {
+      const auto& tilePts = toTilePts(ring);
       // tiny polygons get simplified to two points and discarded ... calculate area instead?
       if(tilePts.size() < 4) {}
       else if(tilePts.back() != tilePts.front()) {
-        LOGD("Invalid polygon for feature %lld", feature().id());
+        LOGD("Invalid polygon for feature %ld", feature().id());
       }
       else {
         m_hasGeom = true;
@@ -546,17 +542,29 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
       p = vt_point(m_centroid);
       // if centroid lies in this tile and only one polygon, use polylabel to get better label pos
       if(p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1 && m_featMPoly.size() == 1) {
-        // m_featMPoly already in tile coords; 1/256 precision for geometry in normalized tile coords
-        vt_point pl = mapbox::polylabel(m_featMPoly[0], 1/256.0f);
-        // only use polylabel if it is in same z14 tile as centroid
-        real zq = std::exp2(14 - m_id.z);
-        if(floor(p*zq) == floor(pl*zq)) { p = pl; }
+        vt_point pl(-1, -1);
+        if(m_id.z >= 14) { pl = mapbox::polylabel(m_featMPoly[0], 1/256.0f); }
         else {
-          LOGD("rejecting polylabel %f,%f for %lld (centroid %f,%f)", pl.x, pl.y, feature().id(), p.x, p.y);
+          // clip feature to z14 tile containing centroid
+          real zq = std::exp2(14 - m_id.z);
+          vt_point p14 = floor(p*zq);
+          vt_point min14 = p14/zq, max14 = (p14 + 1)/zq;
+          clipper<0> xclip{min14.x, max14.x};
+          clipper<1> yclip{min14.y, max14.y};
+          vt_polygon clipped;
+          clipped.reserve(m_featMPoly[0].size());
+          for(const vt_linear_ring& ring : m_featMPoly[0]) { clipped.push_back(yclip(xclip(ring))); }
+          // polygon already in tile coords; 1/256 precision for geometry in normalized tile coords
+          // ... need to adjust precision to ensure same pos as z14 (but limit to 16x)
+          real prec = 1/256.0f/std::min(zq, real(16));
+          if(clipped.front().size() > 3) { pl = mapbox::polylabel(clipped, prec); }
+        }
+        if(pl.x >= 0 && pl.y >= 0 && pl.x <= 1 && pl.y <= 1) { p = pl; }
+        else {
+          LOGD("rejecting polylabel %f,%f for %ld (centroid %f,%f)", pl.x, pl.y, feature().id(), p.x, p.y);
         }
       }
     }
-
     auto build = std::make_unique<vtzero::point_feature_builder>(layerBuild);
     m_hasGeom = p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1;
     if(m_hasGeom) {
