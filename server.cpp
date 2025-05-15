@@ -138,6 +138,8 @@ Optional arguments:
   }
 
   auto time0 = std::chrono::steady_clock::now();
+  auto time1 = time0;
+  clock_t clock0 = clock();
   if(topTile.isValid()) {
     std::function<void(TileID)> buildFn = [&](TileID id){
       LOG("Building %s", id.toString().c_str());
@@ -168,11 +170,16 @@ Optional arguments:
   httplib::Server svr;  //httplib::SSLServer svr;
 
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
-    auto t1 = std::chrono::steady_clock::now();
-    double dt = std::chrono::duration<double>(t1 - time0).count();
+    auto now = std::chrono::steady_clock::now();
+    double uptime = std::chrono::duration<double>(now - time0).count();
+    double dt = std::chrono::duration<double>(now - time1).count();
+    time1 = now;
+    clock_t clock1 = clock();
+    double cpudt = double(clock1 - clock0)/CLOCKS_PER_SEC;
+    clock0 = clock1;
     // std::format not available in g++12!
-    auto statstr = fstring("Uptime: %.0f s\nReqs: %lu\nReqs OK: %lu\nTiles built: %lu\nBytes out: %lu\n",
-        dt, stats.reqs.load(), stats.reqsok.load(), stats.tilesbuilt.load(), stats.bytesout.load());
+    auto statstr = fstring("Uptime: %.0f s\nCPU: %.3f s/%.3f s\nReqs: %lu\nReqs OK: %lu\nTiles built: %lu\nBytes out: %lu\n",
+        uptime, cpudt, dt, stats.reqs.load(), stats.reqsok.load(), stats.tilesbuilt.load(), stats.bytesout.load());
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
   });
@@ -254,7 +261,7 @@ Optional arguments:
     stats.bytesout += res.body.size();
     // client can set X-Hide-Encoding header to suppress Content-Encoding: gzip so client's network stack
     //  doesn't unzip tile (only to have it recompressed when saving to client's mbtiles cache)
-    if(!req.has_header("X-Hide-Encoding")) {
+    if(req.get_header_value("X-Hide-Encoding") != "yes") {
       res.set_header("Content-Encoding", "gzip");
     }
     return httplib::StatusCode::OK_200;
