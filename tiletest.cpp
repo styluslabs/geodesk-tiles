@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
   //  }
 
   {
-    TileID id(41, 99, 8);
+    TileID id(8531, 5766, 14);
     std::string mvt = buildTile(world, ocean, id);
     return 0;
   }
@@ -36,7 +36,7 @@ int main(int argc, char* argv[])
   {
     //TileID id(11912, 6865, 14);
     //TileID id(2617, 6332, 14);  // Alamo square!
-    TileID id(2618, 6341, 14);
+    TileID id(2641, 6335, 14);
     while(id.z > 9) {
       std::string mvt = buildTile(world, ocean, id);
       id = id.getParent();

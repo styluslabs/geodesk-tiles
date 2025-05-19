@@ -470,7 +470,7 @@ void TileBuilder::loadAreaFeature()
   //  boost::geometry to calculate exact area on spherical surface; we just use mercator meters since
   //  this is what Tangram expects (and makes sense for determining if feature should be shown on tile)
   m_area *= squared(MapProjection::metersPerTileAtZoom(m_id.z));
-  //double t = Mercator::scale(feature().xy().y); m_area /= (t*t);
+  if(m_area < 0) { LOGD("Polygon for feature %ld has negative area", feature().id()); }
 }
 
 void TileBuilder::buildPolygon()
@@ -541,7 +541,7 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
       loadAreaFeature();
       p = vt_point(m_centroid);
       // if centroid lies in this tile and only one polygon, use polylabel to get better label pos
-      if(p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1 && m_featMPoly.size() == 1) {
+      if(p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1 && m_featMPoly.size() == 1 && m_featMPoly[0].front().size() > 3) {
         vt_point pl(-1, -1);
         if(m_id.z >= 14) { pl = mapbox::polylabel(m_featMPoly[0], 1/256.0f); }
         else {
