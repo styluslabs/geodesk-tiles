@@ -23,9 +23,6 @@ template<typename T> constexpr T squared(T x) { return x*x; }
 #define LOGD LOG
 #endif
 
-// partial GOL file produced from tile repository by `load` will cause crash when iterating relation members
-//#define DISABLE_RELATIONS
-
 using CodedString = geodesk::Key;
 
 // can't think of a way to do this (w/o separate list of tag strings) w/o using macro

@@ -7,8 +7,9 @@
 #include <unordered_map>
 #include <vector>
 
+// partial GOL file produced from tile repository by `load` will cause crash when iterating relation members
+//#define DISABLE_RELATIONS
 
-// tilebuilder.cpp/.h + ascendtiles.cpp/.h ?
 class AscendTileBuilder : public TileBuilder {
 public:
   AscendTileBuilder(TileID _id);
@@ -109,9 +110,10 @@ void AscendTileBuilder::processFeature()
   }
   else if (feature().isWay()) { ProcessWay(); }
   else if (feature().isNode()) { ProcessNode(); }
+#ifndef DISABLE_RELATIONS
   else if (Find("type") == "multipolygon") { ProcessWay(); }
-  else { ProcessRelation(); }  //if (feature().isRelation())
-  //else { LOG("Unknown feature type!"); }
+  else { ProcessRelation(); }
+#endif
 }
 
 void AscendTileBuilder::ProcessNode()
@@ -222,6 +224,12 @@ static const ZMap transitRoutes =
 static const ZMap otherRoutes =
     { {"road", 8}, {"ferry", 9}, {"bicycle", 10}, {"hiking", 10}, {"foot", 12}, {"mtb", 10}, {"ski", 12} };  //piste = 12;,
 //ignoredRoutes = Set { "power", "railway", "detour", "tracks", "horse", "emergency_access", "snowmobile", "historic", "running", "fitness_trail" }
+
+// bad coastline ways
+static std::unordered_set<int64_t> badCoastlines = {
+  1223379640, 1283812165,  // fixed in OSM on 15 Apr 2025
+  1198191751, 1198191752, 1198191749  // fixed in OSM (by me) 21 May 2025
+};
 
 void AscendTileBuilder::ProcessRelation()
 {
@@ -447,8 +455,8 @@ void AscendTileBuilder::ProcessWay()
   if (natural) {
     if (natural == "coastline") {
       // errant coastlines can improperly fill whole tile with ocean, so manually check
-      int64_t id = feature().id();
-      if (id == 1223379640 || id == 1283812165) { return; }  // fixed in OSM on 15 Apr 2025
+      //int64_t id = feature().id();
+      if (badCoastlines.count(m_featId)) { return; }
       addCoastline(feature());
       // can also be boundary, so don't return
     }

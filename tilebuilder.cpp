@@ -584,7 +584,6 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
     m_build = std::make_unique<vtzero::linestring_feature_builder>(layerBuild);
     if(feature().isWay())
       buildLine(feature());
-#ifndef DISABLE_RELATIONS
     else {  //if(feature().isRelation()) {
       // multi-linestring(?)
       for(Feature child : feature().members()) {
@@ -593,6 +592,5 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
         }
       }
     }
-#endif
   }
 }
