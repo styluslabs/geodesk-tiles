@@ -58,7 +58,8 @@ static void sigint_handler(int s)
 // - download simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html
 //  - note: built with https://github.com/osmcode/osmcoastline
 // - unzip and run `PYTHONPATH=$HOME/maps/ogr2osm python3 -m ogr2osm --positive-id --pbf -o ocean.osm.pbf
-//  ... simplified-water-polygons-split-3857/simplified_water_polygons.shp`
+//  ... --translation ./all_areas.py simplified-water-polygons-split-3857/simplified_water_polygons.shp`
+//  - translation script adds area=yes to every feature so that gol build interprets as areas
 // #`osmium cat -f pbf ocean.osm.pbf -o ocean_fix.osm.pbf` -- seems unnecessary - resulting GOL size identical
 // - run `tool/bin/gol build ocean.gol ocean.osm.pbf`
 
