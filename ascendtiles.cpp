@@ -490,6 +490,19 @@ void AscendTileBuilder::ProcessWay()
     WriteBoundary();
   }
 
+  // we ignore place=village/town/etc. areas for now since most are mapped as nodes and default style on
+  //  openstreetmap.org only renders those mapped as nodes
+  auto place = Find("place");
+  if (place && (place == "island" || place == "islet")) {
+    if (!SetMinZoomByArea()) { return; }
+    LayerAsCentroid("place");
+    Attribute("place", place);
+    SetNameAttributes();
+    SetIdAttributes();
+    AttributeNumeric("area", Area());
+    return;
+  }
+
   // landuse/landcover
   auto amenity = Find("amenity");
   auto tourism = Find("tourism");
