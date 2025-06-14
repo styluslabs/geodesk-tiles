@@ -104,7 +104,7 @@ AscendTileBuilder::AscendTileBuilder(TileID _id) : TileBuilder(_id, ascendLayers
 
 void AscendTileBuilder::processFeature()
 {
-  if(!m_feat) {  // building ocean polygon?
+  if(m_featId == OCEAN_ID) {  // building ocean polygon?
     Layer("water", true);
     Attribute("water", "ocean");
   }
@@ -128,7 +128,7 @@ void AscendTileBuilder::ProcessNode()
     if (place == "continent"   ) { mz = 0; }
     else if (place == "country") { mz = 3 - (pop > 50E6) - (pop > 20E6); }
     else if (place == "state"  ) { mz = 4; }
-    else if (place == "city"   ) { mz = 5; }
+    else if (place == "city"   ) { mz = 5 - (pop > 5E6) - (pop > 0.5E6); }
     else if (place == "town"   ) { mz = pop > 8000 ? 7 : 8; }
     else if (place == "village") { mz = pop > 2000 ? 9 : 10; }
     else if (place == "suburb" ) { mz = 11; }
@@ -142,6 +142,7 @@ void AscendTileBuilder::ProcessNode()
     Layer("place", false);
     //Attribute("class", place);
     Attribute("place", place);
+    Attribute("capital", Find("capital"));
     //if (rank > 0) { AttributeNumeric("rank", rank); }
     if (pop > 0) { AttributeNumeric("population", pop); }
     auto sqkm = Find("sqkm");
@@ -198,7 +199,7 @@ static const auto pavedValues = Set { "paved", "asphalt", "cobblestone", "concre
 static const auto unpavedValues = Set { "unpaved", "compacted", "dirt", "earth", "fine_gravel", "grass",
     "grass_paver", "gravel", "gravel_turf", "ground", "ice", "mud", "pebblestone", "salt", "sand", "snow", "woodchips" };
 
-static const auto boundaryValues = Set { "administrative", "disputed" };
+static const auto boundaryValues = Set { "administrative", "disputed" };  //, "timezone"
 static const auto parkValues = Set { "protected_area", "national_park" };
 static const auto landuseAreas = Set { "retail", "military", "residential", "commercial", "industrial",
     "railway", "cemetery", "forest", "grass", "allotments", "meadow", "recreation_ground", "village_green",
@@ -261,7 +262,7 @@ void AscendTileBuilder::ProcessRelation()
   }
   if (reltype == "boundary") {
     auto boundary = Find("boundary");
-    if (boundary == "administrative" || boundary == "disputed") {
+    if (boundaryValues[boundary]) {
       WriteBoundary();
       return;
     }
@@ -479,15 +480,17 @@ void AscendTileBuilder::ProcessWay()
   }
 
   auto boundary = Find("boundary");
-  // Parks ... possible for way to be both park boundary and landuse?
-  bool park_boundary = parkValues[boundary];
-  if (park_boundary || leisure == "nature_reserve") {
-    WriteProtectedArea();
-  }
+  if (boundary) {
+    // Parks ... possible for way to be both park boundary and landuse?
+    bool park_boundary = parkValues[boundary];
+    if (park_boundary || leisure == "nature_reserve") {
+      WriteProtectedArea();
+    }
 
-  // Boundaries ... possible for way to be shared with park boundary or landuse?
-  if (!feature().belongsToRelation() && (boundary == "administrative" || boundary == "disputed")) {
-    WriteBoundary();
+    // Boundaries ... possible for way to be shared with park boundary or landuse?
+    if (!feature().belongsToRelation() && boundaryValues[boundary]) {
+      WriteBoundary();
+    }
   }
 
   // we ignore place=village/town/etc. areas for now since most are mapped as nodes and default style on
@@ -777,22 +780,29 @@ void AscendTileBuilder::WriteProtectedArea()
 
 void AscendTileBuilder::WriteBoundary()
 {
+  int mz = EXCLUDE;
+  float admin_level = -1;
+  auto boundary = Find("boundary");  // should be passed in as arg
   auto admin_level_tag = Find("admin_level");  //.c_str());
-  float admin_level = admin_level_tag ? double(admin_level_tag) : 11;
-  if (admin_level < 1) { admin_level = 11; }
-  int mz = 0;
-  if (admin_level >= 3 && admin_level < 5) { mz=4; }
-  else if (admin_level >= 5 && admin_level < 7) { mz=8; }
-  else if (admin_level == 7) { mz=10; }
-  else if (admin_level >= 8) { mz=12; }
+  if(admin_level_tag) {
+    admin_level = double(admin_level_tag);
+    if (admin_level < 1) { admin_level = 11; }
+    if (admin_level >= 3 && admin_level < 5) { mz=4; }
+    else if (admin_level >= 5 && admin_level < 7) { mz=8; }
+    else if (admin_level == 7) { mz=10; }
+    else if (admin_level >= 8) { mz=12; }
+  }
+  // most timezone info exists as timezone tags on administrative boundaries, not boundary=timezone relations
+  //else if (boundary == "timezone") { mz = 2; }
 
   if (!MinZoom(mz)) { return; }
 
   bool maritime = Find("maritime") == "yes";
-  bool disputed = Find("boundary") == "disputed" || Find("disputed") == "yes";
+  bool disputed = boundary == "disputed" || Find("disputed") == "yes";
   if (feature().isWay()) {
     Layer("boundary", false);
-    AttributeNumeric("admin_level", admin_level);
+    Attribute("boundary", boundary);
+    if (admin_level >= 0) { AttributeNumeric("admin_level", admin_level); }
     SetNameAttributes();
     // to allow hiding coastal boundaries (natural=coastline)
     Attribute("natural", Find("natural"));
@@ -813,7 +823,8 @@ void AscendTileBuilder::WriteBoundary()
       if (!m_tileBox.intersects(f.bounds())) { continue; }
       setFeature(f);
       Layer("boundary", false);
-      AttributeNumeric("admin_level", admin_level);
+      Attribute("boundary", boundary);
+      if (admin_level >= 0) { AttributeNumeric("admin_level", admin_level); }
       Attribute("name", name);
       Attribute("name_en", name_en);  // not written if empty
       Attribute("natural", Find("natural"));

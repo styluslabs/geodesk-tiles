@@ -47,6 +47,8 @@ public:
   dvec2 m_centroid;
   vt_point m_polyMin, m_polyMax;
 
+  static constexpr int64_t OCEAN_ID = INT_MIN;
+
   // coord mapping
   dvec2 m_origin;
   double m_scale = 0;

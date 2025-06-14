@@ -2,16 +2,19 @@
 
 Combine [libgeodesk](https://github.com/clarisma/libgeodesk) and [vtzero](https://github.com/mapbox/vtzero) to build OpenStreetMap (OSM) vector tiles on demand from a [GeoDesk](https://www.geodesk.com/) Geographic Object Library (GOL).
 
+Currently used to serve tiles for [Ascend Maps](https://github.com/styluslabs/maps/).
 
 ## Usage ##
 
-On Linux, `git clone https://github.com/styluslabs/geodesk-tiles`, `git submodule update --init`, then `make` to create `build/Release/server` (compiler with C++20 support required), then run `server <OSM GOL file> <ocean polygons GOL file>`  to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}`.  The TCP port can be set with the `--port` option or `iptables` can be used to redirect port 80 to 8080 (so server needs no special permissions).
+On Linux, `git clone https://github.com/styluslabs/geodesk-tiles`, `git submodule update --init`, then `make` to create `build/Release/server` (compiler with C++20 support required), then run `server <OSM GOL file> <ocean polygons GOL file>` to provide a standard XYZ (WMTS) tile server at `http://localhost:8080/tiles/{z}/{x}/{y}`.  The TCP port can be set with the `--port` option or `iptables` can be used to redirect port 80 to 8080 (so server needs no special permissions).
 
-The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build).
+The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](https://docs.geodesk.com/gol/build).  Daily prebuilt GOL files can be downloaded from [OpenPlanetData](https://openplanetdata.com/).
 
 To create a pbf for ocean polygons, simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html can be converted with [ogr2osm](https://github.com/roelderickx/ogr2osm).  These are used for determining whether tiles without any coastline ways are ocean or land.  A prebuilt oceans GOL file is available in [releases](https://github.com/styluslabs/geodesk-tiles/releases/tag/tag-for-assets).
 
-An initial mbtiles file such as [this](https://github.com/styluslabs/maps/releases/download/alpha-1/basemap7.mbtiles) with low zoom tiles can be provided with the `--db` option to avoid having to generate these (which is not tested).
+Generated tiles are cached in an mbtiles file (i.e., an sqlite database containing map tiles), which can be set by the `--db` option (the default is planet.mbtiles).  An initial mbtiles file such as [this](https://github.com/styluslabs/maps/releases/download/alpha-1/basemap7.mbtiles) with low zoom tiles can be provided to avoid having to generate these.
+
+Passing `--build z/x/y` to `server` will build the tile z/x/y and all children to z = 14, writing to planet.mbtiles, then exit.
 
 
 ## Schema ##

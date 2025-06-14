@@ -28,7 +28,7 @@ int main(int argc, char* argv[])
   //  }
 
   {
-    TileID id(0, 27, 6);
+    TileID id(20, 49, 7);
     std::string mvt = buildTile(world, ocean, id);
     return 0;
   }
