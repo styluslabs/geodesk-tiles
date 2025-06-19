@@ -103,7 +103,7 @@ public:
 //private:
   void buildLine(Feature& way);
   vt_multi_line_string loadWayFeature(Feature& way);
-  void buildPolygon();
+  void buildPolygon(const vt_multi_polygon& mpoly);
   template<class T> void addRing(vt_polygon& poly, T&& iter, bool outer);
   void loadAreaFeature();
   const std::vector<i32vec2>& toTilePts(const std::vector<vt_point>& pts);

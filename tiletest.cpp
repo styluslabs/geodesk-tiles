@@ -22,13 +22,8 @@ int main(int argc, char* argv[])
   //   }
   // }
 
-  //  {  // Alpine Lake
-  //    TileID id(2611, 6322, 14);
-  //    std::string mvt = buildTile(world, ocean, id);
-  //  }
-
   {
-    TileID id(20, 49, 7);
+    TileID id(662, 1587, 12);
     std::string mvt = buildTile(world, ocean, id);
     return 0;
   }

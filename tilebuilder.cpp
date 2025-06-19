@@ -294,7 +294,7 @@ void TileBuilder::buildCoastline()
     real d = perimDistCW(seg.second.front());
     if(d < 0) {
       LOG("Invalid coastline segment for %s", m_id.toString().c_str());
-      return;
+      continue;  //return;
     }
     edgesegs.emplace(d, std::move(seg.second));
   }
@@ -305,7 +305,7 @@ void TileBuilder::buildCoastline()
     real dback = perimDistCW(ring.back());
     if(dback < 0) {
       LOG("Invalid coastline segment for %s", m_id.toString().c_str());
-      return;
+      ii = edgesegs.erase(ii); continue;  //return;
     }
     auto next = edgesegs.lower_bound(dback);
     if(next == edgesegs.end()) { next = edgesegs.begin(); }
@@ -354,23 +354,8 @@ void TileBuilder::buildCoastline()
       }
     }
   }
-
-  // MVT polygon is single CCW outer ring followed by 0 or more CW inner rings; multipolygon repeats this
-  auto build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
-  for(vt_polygon& outer : outers) {
-    for(vt_linear_ring& ring : outer) {
-      const auto& tilePts = toTilePts(ring);
-      if(tilePts.size() < 4) {}
-      else if(tilePts.back() != tilePts.front()) {
-        LOGD("Invalid polygon for %s coastline", m_id.toString().c_str());
-      }
-      else {
-        m_hasGeom = true;
-        m_builtPts += tilePts.size();
-        build->add_ring_from_container(tilePts);
-      }
-    }
-  }
+  // write feature to tile
+  buildPolygon(outers);
 }
 
 void TileBuilder::addCoastline(Feature& way)
@@ -504,19 +489,23 @@ void TileBuilder::loadAreaFeature()
   if(m_area < 0) { LOGD("Polygon for feature %ld has negative area", feature().id()); }
 }
 
-void TileBuilder::buildPolygon()
+// MVT polygon is single CCW outer ring followed by 0 or more CW inner rings; multipolygon repeats this
+void TileBuilder::buildPolygon(const vt_multi_polygon& mpoly)
 {
-  loadAreaFeature();
   auto* build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
-  for(vt_polygon& poly : m_featMPoly) {
+  for(const vt_polygon& poly : mpoly) {
     if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
     bool isouter = true;
-    for(vt_linear_ring& ring : poly) {
+    for(const vt_linear_ring& ring : poly) {
       const auto& tilePts = toTilePts(ring);
-      // tiny polygons get simplified to two points and discarded ... calculate area instead?
+      // tiny polygons get simplified to two points and discarded ... try quick reject w/ bbox area?
       if(tilePts.size() < 4) {}
       else if(tilePts.back() != tilePts.front()) {
-        LOGD("Invalid polygon for feature %ld", feature().id());
+        LOGD("Invalid polygon for feature %ld in tile %s", m_featId, m_id.toString().c_str());
+      }
+      else if(!isouter && linearRingArea(tilePts) > 0) {
+        // reversal of a small island will start a new outer poly and hide subsequent islands
+        LOGD("Simplification reversed an inner ring for feature %ld in tile %s", m_featId, m_id.toString().c_str());
       }
       else {
         m_hasGeom = true;
@@ -608,7 +597,8 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
   else if(feature().isArea()) {
     //if(!isClosed) { LOG("isArea() but not isClosed!"); }
     m_build = std::make_unique<vtzero::polygon_feature_builder>(layerBuild);
-    buildPolygon();
+    loadAreaFeature();
+    buildPolygon(m_featMPoly);
   }
   else {
     //if(isClosed) { LOG("isClosed but not isArea()!"); }
