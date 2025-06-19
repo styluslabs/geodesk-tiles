@@ -798,13 +798,13 @@ void AscendTileBuilder::WriteBoundary()
   float admin_level = -1;
   auto boundary = Find("boundary");  // should be passed in as arg
   auto admin_level_tag = Find("admin_level");  //.c_str());
-  if(admin_level_tag) {
+  if (admin_level_tag) {
     admin_level = double(admin_level_tag);
-    if (admin_level < 1) { admin_level = 11; }
-    if (admin_level >= 3 && admin_level < 5) { mz=4; }
-    else if (admin_level >= 5 && admin_level < 7) { mz=8; }
-    else if (admin_level == 7) { mz=10; }
-    else if (admin_level >= 8) { mz=12; }
+    if      (admin_level >= 8) { mz=12; }
+    else if (admin_level >= 7) { mz=10; }
+    else if (admin_level >= 5) { mz=8; }
+    else if (admin_level >= 3) { mz=4; }
+    else if (admin_level >= 1) { mz=2; }
   }
   // most timezone info exists as timezone tags on administrative boundaries, not boundary=timezone relations
   //else if (boundary == "timezone") { mz = 2; }
