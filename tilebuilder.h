@@ -69,6 +69,7 @@ public:
   TileID m_id;
   vtzero::tile_builder m_tile;
   std::map<std::string, vtzero::layer_builder> m_layers;
+  std::vector<std::string> m_queries;
 
   TileBuilder(TileID _id, const std::vector<std::string>& layers);
   Feature& feature() { return *m_feat; }

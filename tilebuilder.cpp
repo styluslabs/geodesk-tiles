@@ -69,54 +69,38 @@ std::string TileBuilder::build(const Features& world, const Features& ocean, boo
   m_tileFeats = &tileFeats;
   int nfeats = 0;
 
-  if(m_id.z < 8) {
-    const char* queries[] = {
-      m_id.z < 7 ? "n[place=continent,country,state,city]" : "n[place=continent,country,state,city,town]",
-      m_id.z < 5 ? "w[highway=motorway]" : (m_id.z < 7 ? "w[highway=motorway,trunk]" : "w[highway=motorway,trunk,primary]"),
-      "wra[boundary=administrative,disputed]",  // no index on admin_level
-      "a[place=island]",
-      "a[natural=water,glacier]",  //,wood,grassland,grass,scrub,fell,heath,wetland,beach,sand,bare_rock,scree]"
-      "a[waterway=river]"
-    };
-
-    for(auto q : queries) {
-      Features queryFeats = tileFeats(q);
-      for(Feature f : queryFeats) {
-        setFeature(f);
-        processFeature();
-        ++nfeats;
-      }
-    }
-
-    // use ocean geometry from ocean.gol instead of world
-    Features oceanFeats = ocean(m_tileBox);
-    for(Feature f : oceanFeats) {
+  auto dispatchFeatures = [&](const Features& feats, bool isOcean = false){
+    for(Feature f : feats) {
       setFeature(f);
-      m_featId = OCEAN_ID;
+      if(isOcean) { m_featId = OCEAN_ID; }
       processFeature();
       ++nfeats;
     }
-  }
+  };
+
+  if(m_queries.empty())
+    dispatchFeatures(tileFeats);
   else {
-    for(Feature f : tileFeats) {
-      setFeature(f);
-      processFeature();
-      ++nfeats;
-    }
-    m_feat = nullptr;
-
-    // ocean polygons
-    m_featId = OCEAN_ID;
-    if(!m_coastline.empty())
-      processFeature();
-    else {
-      LngLat center = MapProjection::projectedMetersToLngLat(MapProjection::tileCenter(m_id));
-      // create all ocean tile if center is inside an ocean polygon
-      // looks like there might be a bug in FeatureUtils::isEmpty() used by bool(Features), so do this instead
-      Features f = ocean.containingLonLat(center.longitude, center.latitude);
-      if(f.begin() != f.end()) { processFeature(); }
+    for(const std::string& q : m_queries) {
+      dispatchFeatures(tileFeats(q.c_str()));
     }
   }
+
+  // ocean polygons
+  m_feat = nullptr;
+  m_featId = OCEAN_ID;
+  if(m_id.z < 8)
+    dispatchFeatures(ocean(m_tileBox), true);
+  else if(!m_coastline.empty())
+    processFeature();
+  else {
+    LngLat center = MapProjection::projectedMetersToLngLat(MapProjection::tileCenter(m_id));
+    // create all ocean tile if center is inside an ocean polygon
+    // looks like there might be a bug in FeatureUtils::isEmpty() used by bool(Features), so do this instead
+    Features f = ocean.containingLonLat(center.longitude, center.latitude);
+    if(f.begin() != f.end()) { processFeature(); }
+  }
+
   Layer("");  // flush final feature
   m_tileFeats = nullptr;
 

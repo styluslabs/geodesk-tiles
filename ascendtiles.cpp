@@ -100,7 +100,21 @@ struct ZMap {
 static const std::vector<std::string> ascendLayers =
     { "place", "boundary", "poi", "transportation", "transit", "building", "water", "landuse" };
 
-AscendTileBuilder::AscendTileBuilder(TileID _id) : TileBuilder(_id, ascendLayers) {}
+AscendTileBuilder::AscendTileBuilder(TileID _id) : TileBuilder(_id, ascendLayers)
+{
+  if(m_id.z < 8) {
+    m_queries = {
+      m_id.z < 7 ? "n[place=continent,country,state,city]" : "n[place=continent,country,state,city,town]",
+      m_id.z < 5 ? "w[highway=motorway]" : (m_id.z < 7 ? "w[highway=motorway,trunk]" : "w[highway=motorway,trunk,primary]"),
+#ifndef DISABLE_RELATIONS
+      "wra[boundary=administrative,disputed]",  // no index on admin_level
+#endif
+      "a[place=island]",
+      "a[natural=water,glacier]",  //,wood,grassland,grass,scrub,fell,heath,wetland,beach,sand,bare_rock,scree]"
+      "a[waterway=river]"
+    };
+  }
+}
 
 void AscendTileBuilder::processFeature()
 {
