@@ -141,7 +141,7 @@ void AscendTileBuilder::ProcessNode()
 
     if (place == "continent"   ) { mz = 0; }
     else if (place == "country") { mz = 3 - (pop > 50E6) - (pop > 20E6); }
-    else if (place == "state"  ) { mz = 4; }
+    else if (place == "state" || place == "province") { mz = 4; }
     else if (place == "city"   ) { mz = 5 - (pop > 5E6) - (pop > 0.5E6); }
     else if (place == "town"   ) { mz = pop > 8000 ? 7 : 8; }
     else if (place == "village") { mz = pop > 2000 ? 9 : 10; }
@@ -156,6 +156,7 @@ void AscendTileBuilder::ProcessNode()
     Layer("place", false);
     //Attribute("class", place);
     Attribute("place", place);
+    Attribute("ref", Find("ref"));
     Attribute("capital", Find("capital"));
     //if (rank > 0) { AttributeNumeric("rank", rank); }
     if (pop > 0) { AttributeNumeric("population", pop); }
@@ -179,12 +180,21 @@ void AscendTileBuilder::ProcessNode()
   auto natural = Find("natural");
   if (!natural) {}
   else if (natural == "peak" || natural == "volcano") {
-    if (!MinZoom(11)) { return; }
+    auto prominence_tag = Find("prominence");
+    float prominence = prominence_tag ? double(prominence_tag) : 0;
+    int mz = 11;
+    if (prominence > 4000) { mz = 6; }
+    else if (prominence > 3500) { mz = 7; }
+    else if (prominence > 3000) { mz = 8; }
+    else if (prominence > 2500) { mz = 9; }
+    else if (prominence > 2000) { mz = 10; }
+    if (!MinZoom(mz)) { return; }
     Layer("poi", false);
     SetNameAttributes();
     SetIdAttributes();
     SetEleAttributes();
     Attribute("natural", natural);
+    if (prominence > 0) { AttributeNumeric("prominence", prominence); }
     return;
   }
   else if (natural == "bay") {
@@ -301,6 +311,15 @@ void AscendTileBuilder::ProcessWay()
     }
     NewWritePOI(0, MinZoom(14));
     return;
+  }
+
+  // a few cases of natural=coastline combined with waterway=dam or highway
+  auto natural = Find("natural");
+  if (natural && natural == "coastline") {
+    // errant coastlines can improperly fill whole tile with ocean, so manually check
+    //int64_t id = feature().id();
+    if (badCoastlines.count(m_featId)) { return; }
+    addCoastline(feature());
   }
 
   //if (Find("disused") == "yes") { return; } -- not commonly used
@@ -436,7 +455,6 @@ void AscendTileBuilder::ProcessWay()
     landuse = "industrial";
   }
 
-  auto natural = Find("natural");
   auto leisure = Find("leisure");
   std::string waterbody;
   if (waterLanduse[landuse]) { waterbody = landuse; }
@@ -468,14 +486,7 @@ void AscendTileBuilder::ProcessWay()
   }
 
   if (natural) {
-    if (natural == "coastline") {
-      // errant coastlines can improperly fill whole tile with ocean, so manually check
-      //int64_t id = feature().id();
-      if (badCoastlines.count(m_featId)) { return; }
-      addCoastline(feature());
-      // can also be boundary, so don't return
-    }
-    else if (natural == "bay") {
+    if (natural == "bay") {
       if (!MinZoom(8)) { return; }
       LayerAsCentroid("water");
       SetNameAttributes();
