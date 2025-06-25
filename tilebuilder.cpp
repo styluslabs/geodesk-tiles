@@ -483,8 +483,10 @@ void TileBuilder::buildPolygon(const vt_multi_polygon& mpoly)
     if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
     bool isouter = true;
     for(const vt_linear_ring& ring : poly) {
-      // Visvalingam-Whyatt seems less likely to produce an invalid polygon vs. RDP
-      const auto& tilePts = toTilePts(ring, visvalingam(ring, simplifyThresh*simplifyThresh));
+      // Visvalingam-Whyatt seems less likely to produce an invalid polygon vs. RDP ... but is slower so
+      //  don't use for coastlines unless we see problems
+      auto keep = m_featId == OCEAN_ID ? simplify(ring, simplifyThresh) : visvalingam(ring, simplifyThresh*simplifyThresh);
+      const auto& tilePts = toTilePts(ring, keep);
       // tiny polygons get simplified to two points and discarded ... most should be rejected by
       //  SetMinZoomByArea() beforehand, but clipping can create some slivers
       if(tilePts.size() < 4) {}

@@ -1,3 +1,5 @@
+// from https://github.com/felt/tippecanoe/blob/main/visvalingam.cpp
+
 // Adapted from
 // https://github.com/paulmach/orb/blob/dcade4901baea0727377ccf7c4aab2addd92d152/simplify/visvalingam.go
 
