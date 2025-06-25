@@ -22,40 +22,20 @@ int main(int argc, char* argv[])
   //   }
   // }
 
-  {
-    TileID id(662, 1587, 12);
-    std::string mvt = buildTile(world, ocean, id);
-    return 0;
-  }
+  // {
+  //   TileID id(662, 1587, 12);
+  //   std::string mvt = buildTile(world, ocean, id);
+  //   return 0;
+  // }
 
   {
-    //TileID id(11912, 6865, 14);
-    //TileID id(2617, 6332, 14);  // Alamo square!
-    TileID id(2641, 6335, 14);
-    while(id.z > 9) {
+    TileID id(2617, 6332, 14);  // Alamo square!
+    //TileID id(686, 1607, 12);
+    while(id.z > 7) {
       std::string mvt = buildTile(world, ocean, id);
       id = id.getParent();
     }
-    //std::string mvt = buildTile(world, ocean, id);
-    return 0;
   }
-  {
-    TileID id(2615, 6329, 14);
-    std::string mvt = buildTile(world, ocean, id);
-  }
-  {
-    TileID id(2612, 6327, 14);  // missing islands
-    std::string mvt = buildTile(world, ocean, id);
-  }
-  {
-    TileID id(2609, 6334, 14);  // all ocean
-    std::string mvt = buildTile(world, ocean, id);
-  }
-
-  // while(id.z > 9) {
-  //   std::string mvt = buildTile(world, id);
-  //   id = id.getParent();
-  // }
 
   return 0;
 }

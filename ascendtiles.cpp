@@ -154,7 +154,6 @@ void AscendTileBuilder::ProcessNode()
     if (!MinZoom(mz)) { return; }
 
     Layer("place", false);
-    //Attribute("class", place);
     Attribute("place", place);
     Attribute("ref", Find("ref"));
     Attribute("capital", Find("capital"));
@@ -275,7 +274,6 @@ void AscendTileBuilder::ProcessRelation()
     } else {
       return;
     }
-    //Attribute("class", "route");
     Attribute("route", route);
     Attribute("name", Find("name"));
     Attribute("ref", Find("ref"));
@@ -317,43 +315,33 @@ void AscendTileBuilder::ProcessWay()
   auto natural = Find("natural");
   if (natural && natural == "coastline") {
     // errant coastlines can improperly fill whole tile with ocean, so manually check
-    //int64_t id = feature().id();
     if (badCoastlines.count(m_featId)) { return; }
     addCoastline(feature());
   }
 
-  //if (Find("disused") == "yes") { return; } -- not commonly used
+  bool isClosed = IsClosed();
   // Roads/paths/trails - 2nd most common way type
   auto highway_tag = Find("highway");
   if (highway_tag) {
     std::string highway = highway_tag;
     int minzoom = highwayValues[highway];
     bool ramp = minzoom < 0;
-    if(ramp) {
+    if (ramp) {
       highway = highway.substr(0, highway.find("_"));
       minzoom = -minzoom;
     }
     int lblzoom = (minzoom >> 8) ? (minzoom >> 8) : 14;
     minzoom = minzoom & 0xFF;
+    if (!MinZoom(minzoom)) { return; }
 
-    //if (highway == "proposed" || highway == "construction") { return; }  -- will fail MinZoom test anyway
-    // Construction -- not used currently
-    //auto construction = Find("construction");
-    //if (highway == "construction" && constructionValues[construction]) {
-    //  highway = construction;
-    //  construction = "yes";
-    //}
-
-    if(!MinZoom(minzoom)) { return; }
-
-    auto access = Find("access");
+    auto access = Find("access");  // note that bool(access) will return false for 'no'
     if (access == "private" || access == "no") { return; }
     // most footways are sidewalks or crossings, which are mapped inconsistently so just add clutter and
-    //  confusion the map; we could consider keeping footway == "alley"
+    //  confusion to the map; we could consider keeping footway == "alley"
     if (highway == "footway" && Find("footway")) { return; }
+    if (isClosed && !SetMinZoomByArea()) { return; }
 
     Layer("transportation", false);
-    //Attribute("class", h);
     Attribute("highway", highway);
     SetBrunnelAttributes();
     if (ramp) { AttributeNumeric("ramp", 1); }
@@ -362,7 +350,7 @@ void AscendTileBuilder::ProcessWay()
     if (highway == "service") { Attribute("service", Find("service")); }
 
     auto oneway = Find("oneway");
-    if (oneway == "yes" || oneway == "1") {
+    if (oneway && (oneway == "yes" || oneway == "1")) {
       AttributeNumeric("oneway", 1);
     }
     //if (oneway == "-1") {}
@@ -416,13 +404,13 @@ void AscendTileBuilder::ProcessWay()
     return;
   }
 
-  // Railways ('transportation' and 'transportation_name', plus 'transportation_name_detail');
+  // Railways
   auto railway = Find("railway");
-  if (railway) {  //!= ""
+  if (railway) {
     auto service = Find("service");
     if (!MinZoom(service ? 12 : 9)) { return; }
+    if (isClosed && !SetMinZoomByArea()) { return; }  // platforms mostly
     Layer("transportation", false);
-    //Attribute("class", "rail");
     Attribute("railway", railway);
     SetBrunnelAttributes();
     SetNameAttributes(14);
@@ -430,10 +418,8 @@ void AscendTileBuilder::ProcessWay()
     return;
   }
 
-  bool isClosed = IsClosed();
   auto waterway = Find("waterway");
   std::string landuse = Find("landuse");
-
   // waterway is single way indicating course of a waterway - wide rivers, etc. have additional polygons to map area
   if (!waterway) {}
   else if (waterwayClasses[waterway] && !isClosed) {
@@ -441,7 +427,7 @@ void AscendTileBuilder::ProcessWay()
     if (!MinZoom(namedriver ? 8 : 12)) { return; }
     Layer("water", false);  //waterway , waterway_detail
     if (Find("intermittent") == "yes") { AttributeNumeric("intermittent", 1); }
-    Attribute("class", waterway);
+    //Attribute("class", waterway);
     Attribute("waterway", waterway);
     SetNameAttributes();
     SetBrunnelAttributes();
@@ -492,11 +478,10 @@ void AscendTileBuilder::ProcessWay()
       SetNameAttributes();
       AttributeNumeric("area", Area());
       return;
-    }
-    else if (natural == "valley") {
+    } else if (natural == "valley" || natural == "gorge") {
       // special case since valleys are mapped as ways
       auto len = Length();
-      SetMinZoomByArea(len*len);
+      if (!SetMinZoomByArea(len*len)) { return; }
       Layer("landuse", false);
       Attribute("natural", natural);
       SetNameAttributes();
@@ -560,7 +545,6 @@ void AscendTileBuilder::ProcessWay()
     if(!SetMinZoomByArea()) { return; }
     Layer("landuse", isClosed);
     //SetZOrder(way);
-    //Attribute("class", man_made);
     Attribute("man_made", man_made);
     return;
   }
@@ -583,7 +567,6 @@ void AscendTileBuilder::ProcessWay()
   if (piste_diff) {  // != "") {
     if (!MinZoom(10)) { return; }
     Layer("transportation", isClosed);
-    //Attribute("class", "piste");
     Attribute("route", "piste");
     Attribute("difficulty", piste_diff);
     Attribute("piste_type", Find("piste:type"));
@@ -596,7 +579,6 @@ void AscendTileBuilder::ProcessWay()
   if (aerialway) {  // != "") {
     if (!MinZoom(10)) { return; }
     Layer("transportation", false);
-    //Attribute("class", "aerialway");
     Attribute("aerialway", aerialway);
     SetNameAttributes(14);
     return;
@@ -613,6 +595,7 @@ void AscendTileBuilder::ProcessWay()
   }
   if (aerowayClasses[aeroway]) {
     if (!MinZoom(10)) { return; }
+    if (isClosed && !SetMinZoomByArea()) { return; }
     Layer("transportation", isClosed);  //"aeroway"
     Attribute("aeroway", aeroway);
     if (aeroway == "aerodrome") {
@@ -729,11 +712,15 @@ void AscendTileBuilder::SetBrunnelAttributes()
 // Set minimum zoom level by area
 bool AscendTileBuilder::SetMinZoomByArea(double area)
 {
+  static constexpr int64_t maxH = std::numeric_limits<int32_t>::max()/2;
+  auto bounds = feature().ptr().bounds();  // this is fast
+  // reject invalid geometry caused by wrapping beyond +/-85 latitude in GeoDesk
+  if (int64_t(bounds.maxY()) - int64_t(bounds.minY()) > maxH) { return false; }
   if (MinZoom(14)) { return true; }  // skip area calc for highest zoom
   double minarea = squared(MapProjection::metersPerTileAtZoom(m_id.z - 1)/256.0);
   if (area > 0) { return area >= minarea; }
   // bbox area sets upper limit on feature area
-  if (feature().ptr().bounds().area() < minarea) { return false; }
+  if (bounds.area() < minarea) { return false; }
   return Area() >= minarea;
 }
 
@@ -790,7 +777,6 @@ void AscendTileBuilder::WriteProtectedArea()
   auto leisure = Find("leisure");
   auto protect_class = Find("protect_class");
   Layer("landuse", true);
-  //Attribute("class", boundary);
   Attribute("boundary", boundary);
   Attribute("leisure", leisure);
   Attribute("protect_class", protect_class);
@@ -840,6 +826,8 @@ void AscendTileBuilder::WriteBoundary()
     std::string name = Find("name");
     std::string name_en = Find("name:en");
     if (name_en == name) { name_en = ""; }
+    std::string iso2 = Find("ISO3166-2");
+    iso2 = iso2.substr(0, 2);  // keep only country code for now
 
     auto members = GetMembers();
     for (Feature f : members) {
@@ -852,6 +840,7 @@ void AscendTileBuilder::WriteBoundary()
       if (admin_level >= 0) { AttributeNumeric("admin_level", admin_level); }
       Attribute("name", name);
       Attribute("name_en", name_en);  // not written if empty
+      Attribute("ISO3166_2", iso2);  // not written if empty
       Attribute("natural", Find("natural"));
       if (maritime || Find("maritime") == "yes") { Attribute("maritime", "yes"); }
       if (disputed || Find("boundary") == "disputed" || Find("disputed") == "yes") {

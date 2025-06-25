@@ -205,10 +205,12 @@ vt_point TileBuilder::toTileCoord(Coordinate r) {
   return vt_point(m_scale*(dvec2(r.x, r.y) - m_origin));  // + 0.5);
 }
 
+// in visvalingam.cpp
+std::vector<int> visvalingam(const std::vector<vt_point>& pts, real thresh);
+
 // simplify and write to TileBuilder.tilePts as MVT coord (i32 0..tileExtent)
-const std::vector<i32vec2>& TileBuilder::toTilePts(const std::vector<vt_point>& pts)
+const std::vector<i32vec2>& TileBuilder::toTilePts(const std::vector<vt_point>& pts, const std::vector<int>& keep)
 {
-  auto keep = simplify(pts, simplifyThresh);
   m_tilePts.clear();
   m_tilePts.reserve(pts.size());
   for(size_t ii = 0; ii < pts.size(); ++ii) {
@@ -378,7 +380,7 @@ void TileBuilder::buildLine(Feature& way)
   vt_multi_line_string clipPts = loadWayFeature(way);
   auto* build = static_cast<vtzero::linestring_feature_builder*>(m_build.get());
   for(auto& line : clipPts) {
-    const auto& tilePts = toTilePts(line);
+    const auto& tilePts = toTilePts(line, simplify(line, simplifyThresh));
     if(tilePts.size() > 1) {
       m_hasGeom = true;
       m_builtPts += tilePts.size();
@@ -481,8 +483,10 @@ void TileBuilder::buildPolygon(const vt_multi_polygon& mpoly)
     if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
     bool isouter = true;
     for(const vt_linear_ring& ring : poly) {
-      const auto& tilePts = toTilePts(ring);
-      // tiny polygons get simplified to two points and discarded ... try quick reject w/ bbox area?
+      // Visvalingam-Whyatt seems less likely to produce an invalid polygon vs. RDP
+      const auto& tilePts = toTilePts(ring, visvalingam(ring, simplifyThresh*simplifyThresh));
+      // tiny polygons get simplified to two points and discarded ... most should be rejected by
+      //  SetMinZoomByArea() beforehand, but clipping can create some slivers
       if(tilePts.size() < 4) {}
       else if(tilePts.back() != tilePts.front()) {
         LOGD("Invalid polygon for feature %ld in tile %s", m_featId, m_id.toString().c_str());

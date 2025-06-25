@@ -107,7 +107,7 @@ public:
   void buildPolygon(const vt_multi_polygon& mpoly);
   template<class T> void addRing(vt_polygon& poly, T&& iter, bool outer);
   void loadAreaFeature();
-  const std::vector<i32vec2>& toTilePts(const std::vector<vt_point>& pts);
+  const std::vector<i32vec2>& toTilePts(const std::vector<vt_point>& pts, const std::vector<int>& keep);
 
   void addCoastline(Feature& way);
   void buildCoastline();

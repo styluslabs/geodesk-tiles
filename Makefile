@@ -58,6 +58,7 @@ MODULE_BASE := .
 
 MODULE_SOURCES = \
   miniz/miniz.c \
+  visvalingam.cpp \
   tilebuilder.cpp \
   ascendtiles.cpp \
   $(MAIN_SOURCE)
