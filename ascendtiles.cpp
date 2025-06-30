@@ -102,10 +102,9 @@ static const std::vector<std::string> ascendLayers =
 
 AscendTileBuilder::AscendTileBuilder(TileID _id) : TileBuilder(_id, ascendLayers)
 {
-  if(m_id.z < 8) {
+  if (m_id.z < 8) {
     m_queries = {
       m_id.z < 7 ? "n[place=continent,country,state,city]" : "n[place=continent,country,state,city,town]",
-      m_id.z < 5 ? "w[highway=motorway]" : (m_id.z < 7 ? "w[highway=motorway,trunk]" : "w[highway=motorway,trunk,primary]"),
 #ifndef DISABLE_RELATIONS
       "wra[boundary=administrative,disputed]",  // no index on admin_level
 #endif
@@ -113,6 +112,11 @@ AscendTileBuilder::AscendTileBuilder(TileID _id) : TileBuilder(_id, ascendLayers
       "a[natural=water,glacier]",  //,wood,grassland,grass,scrub,fell,heath,wetland,beach,sand,bare_rock,scree]"
       "a[waterway=river]"
     };
+    if (m_id.z >= 6) { m_queries.push_back("n[natural=peak,volcano]"); }  // for prominent peaks
+    // highways; note 90% of highway=trunk has ref tag, so no point including those earlier
+    if (m_id.z >= 7) { m_queries.push_back("w[highway=motorway,trunk,primary]"); }
+    else if (m_id.z >= 6) { m_queries.push_back("w[highway=motorway,trunk]"); }
+    else if (m_id.z >= 4) { m_queries.push_back("w[highway=motorway]"); }
   }
 }
 
@@ -209,7 +213,7 @@ void AscendTileBuilder::ProcessNode()
 // default zoom for including labels is 14; use | <zoom>_z to override
 constexpr unsigned long long operator""_z(unsigned long long z) { return z << 8; }
 static const ZMap highwayValues = {
-    {"motorway", 4|8_z}, {"trunk", 5|8_z}, {"primary", 7|12_z}, {"secondary", 9|12_z}, {"tertiary", 11|12_z},
+    {"motorway", 4|8_z}, {"trunk", 6|8_z}, {"primary", 7|12_z}, {"secondary", 9|12_z}, {"tertiary", 11|12_z},
     {"unclassified", 12}, {"residential", 12}, {"road", 12}, {"living_street", 12}, {"service", 12}, // minor roads
     {"cycleway", 10}, {"byway", 10}, {"bridleway", 10}, {"track", 10},  // tracks (was z14)
     {"footway", 10}, {"path", 10}, {"steps", 10}, {"pedestrian", 10},  // paths (was z14)
@@ -221,6 +225,8 @@ static const auto pavedValues = Set { "paved", "asphalt", "cobblestone", "concre
     "concrete:plates", "metal", "paving_stones", "sett", "unhewn_cobblestone", "wood" };
 static const auto unpavedValues = Set { "unpaved", "compacted", "dirt", "earth", "fine_gravel", "grass",
     "grass_paver", "gravel", "gravel_turf", "ground", "ice", "mud", "pebblestone", "salt", "sand", "snow", "woodchips" };
+static const auto sacScaleValues = Set {
+    "demanding_mountain_hiking", "alpine_hiking", "demanding_alpine_hiking", "difficult_alpine_hiking" };
 
 static const auto boundaryValues = Set { "administrative", "disputed" };  //, "timezone"
 static const auto parkValues = Set { "protected_area", "national_park" };
@@ -392,6 +398,8 @@ void AscendTileBuilder::ProcessWay()
     if (trailvis && trailvis != "good" && trailvis != "excellent") {
       Attribute("trail_visibility", trailvis);
     }
+    auto sac_scale = Find("sac_scale");  // only write the less common (i.e., more difficult) grades
+    if (sacScaleValues[sac_scale]) { Attribute("sac_scale", sac_scale);  }
     Attribute("mtb_scale", Find("mtb:scale"));  // mountain biking difficulty rating
     if (highway == "path") { Attribute("golf", Find("golf")); }
 
