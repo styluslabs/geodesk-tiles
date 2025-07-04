@@ -401,7 +401,12 @@ void AscendTileBuilder::ProcessWay()
     auto sac_scale = Find("sac_scale");  // only write the less common (i.e., more difficult) grades
     if (sacScaleValues[sac_scale]) { Attribute("sac_scale", sac_scale);  }
     Attribute("mtb_scale", Find("mtb:scale"));  // mountain biking difficulty rating
-    if (highway == "path") { Attribute("golf", Find("golf")); }
+    if (highway == "path") {
+      Attribute("golf", Find("golf"));
+      // no easy way to access parent relation in GeoDesk currently, but add a relation membership flag to
+      //  experiment w/ hiding less important paths at low zooms
+      if (feature().belongsToRelation()) { AttributeNumeric("relation_member", 1); }
+    }
 
     // name, roadway info
     SetNameAttributes(lblzoom);
@@ -784,10 +789,12 @@ void AscendTileBuilder::WriteProtectedArea()
   auto boundary = Find("boundary");
   auto leisure = Find("leisure");
   auto protect_class = Find("protect_class");
+  auto access = Find("access");  // probably should just not write private areas
   Layer("landuse", true);
   Attribute("boundary", boundary);
   Attribute("leisure", leisure);
   Attribute("protect_class", protect_class);
+  Attribute("access", access);
   SetNameAttributes();
   SetIdAttributes();
   AttributeNumeric("area", Area());
@@ -795,6 +802,7 @@ void AscendTileBuilder::WriteProtectedArea()
   NewWritePOI(Area(), true);
   Attribute("boundary", boundary);
   Attribute("protect_class", protect_class);
+  Attribute("access", access);
 }
 
 void AscendTileBuilder::WriteBoundary()
