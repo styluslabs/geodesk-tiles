@@ -232,7 +232,8 @@ static const auto boundaryValues = Set { "administrative", "disputed" };  //, "t
 static const auto parkValues = Set { "protected_area", "national_park" };
 static const auto landuseAreas = Set { "retail", "military", "residential", "commercial", "industrial",
     "railway", "cemetery", "forest", "grass", "allotments", "meadow", "recreation_ground", "village_green",
-    "landfill", "farmland", "farmyard", "orchard", "vineyard", "plant_nursery", "greenhouse_horticulture", "farm", "quarry" };
+    "landfill", "farmland", "farmyard", "orchard", "vineyard", "plant_nursery", "greenhouse_horticulture",
+    "farm", "quarry", "winter_sports", "harbour" };
 static const auto naturalAreas = Set { "wood", "grassland", "grass", "scrub", "fell", "heath", "wetland",
     "glacier", "beach", "sand", "bare_rock", "scree" };
 static const auto leisureAreas = Set { "pitch", "park", "garden", "playground", "golf_course", "stadium" };
@@ -659,11 +660,14 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
 {
   if(!MinZoom(12) && area <= 0) { return false; }  // no POIs below z12
 
+  int heritage = -1;
+  auto heritage_tag = Find("heritage");  // numeric value matching admin_level (1 = international, e.g. UNESCO)
+  if (heritage_tag) { heritage = double(heritage_tag); }
   bool wikipedia = Holds("wikipedia");
   bool wikidata = Holds("wikidata");
   bool writepoi = force && Holds("name");
   if (!writepoi) {
-    bool force12 = area > 0 || wikipedia || wikidata;
+    bool force12 = area > 0 || wikipedia || wikidata || (heritage > 0 && heritage <= 4);
     for (const ZMap& kz : poiTags) {
       auto val = readTag(kz.tagCode());
       int z = bool(val) ? kz[val] : EXCLUDE;
@@ -679,6 +683,10 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
   // actual wikipedia/wikidata ref not useful w/o internet access, in which case we can just get from OSM
   if (wikipedia) { AttributeNumeric("wikipedia", 1); }
   else if (wikidata) { AttributeNumeric("wikidata", 1); }
+  if (heritage > 0 && hertiage <= 4) {
+    AttributeNumeric("heritage", heritage);
+    Attribute("heritage_operator", Find("heritage:operator"));
+  }
   // write value for all tags in poiTags (if present)
   for (const ZMap& y : poiTags) { Attribute(y.tag(), readTag(y.tagCode())); }
   for (auto& s : extraPoiTags) { Attribute(s.tag(), readTag(s.tagCode())); }
@@ -789,7 +797,8 @@ void AscendTileBuilder::WriteProtectedArea()
   auto boundary = Find("boundary");
   auto leisure = Find("leisure");
   auto protect_class = Find("protect_class");
-  auto access = Find("access");  // probably should just not write private areas
+  // convert "access" to string since bool() will return false for access=no
+  std::string access = Find("access");  // probably should just not write private areas
   Layer("landuse", true);
   Attribute("boundary", boundary);
   Attribute("leisure", leisure);
