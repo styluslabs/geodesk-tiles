@@ -149,7 +149,8 @@ void AscendTileBuilder::ProcessNode()
     else if (place == "city"   ) { mz = 5 - (pop > 5E6) - (pop > 0.5E6); }
     else if (place == "town"   ) { mz = pop > 8000 ? 7 : 8; }
     else if (place == "village") { mz = pop > 2000 ? 9 : 10; }
-    else if (place == "suburb" ) { mz = 11; }
+    else if (place == "borough") { mz = 11; }
+    else if (place == "suburb" ) { mz = 12; }
     else if (place == "hamlet" ) { mz = 12; }
     else if (place == "quarter") { mz = 12; }
     //else if (place == "neighbourhood") { mz = 13; }  -- 13 is the default
@@ -236,10 +237,12 @@ static const auto landuseAreas = Set { "retail", "military", "residential", "com
     "farm", "quarry", "winter_sports", "harbour" };
 static const auto naturalAreas = Set { "wood", "grassland", "grass", "scrub", "fell", "heath", "wetland",
     "glacier", "beach", "sand", "bare_rock", "scree" };
-static const auto leisureAreas = Set { "pitch", "park", "garden", "playground", "golf_course", "stadium" };
+static const auto leisureAreas = Set {
+    "pitch", "park", "garden", "playground", "golf_course", "stadium", "sports_centre", "common" };
 static const auto amenityAreas = Set { "school", "university", "kindergarten", "college", "library",
     "hospital", "bus_station", "marketplace", "research_institute", "prison" };
 static const auto tourismAreas = Set { "zoo", "theme_park", "aquarium" };
+static const auto placeAreas = Set { "island", "islet", "archipelago" };
 
 static const auto waterwayClasses = Set { "stream", "river", "canal", "drain", "ditch" };
 static const auto waterwayAreas   = Set { "river", "riverbank", "stream", "canal", "drain", "ditch", "dock" };
@@ -404,9 +407,8 @@ void AscendTileBuilder::ProcessWay()
     Attribute("mtb_scale", Find("mtb:scale"));  // mountain biking difficulty rating
     if (highway == "path") {
       Attribute("golf", Find("golf"));
-      // no easy way to access parent relation in GeoDesk currently, but add a relation membership flag to
-      //  experiment w/ hiding less important paths at low zooms
-      if (feature().belongsToRelation()) { AttributeNumeric("relation_member", 1); }
+      // add a flag to experiment w/ hiding less important paths at low zooms
+      if (feature().belongsToRelation() || Holds("name")) { AttributeNumeric("has_name", 1); }
     }
 
     // name, roadway info
@@ -414,7 +416,7 @@ void AscendTileBuilder::ProcessWay()
     //Attribute("network","road"); // **** could also be us-interstate, us-highway, us-state
     Attribute("maxspeed", Find("maxspeed"));
     Attribute("lanes", Find("lanes"));
-    Attribute("ref", Find("ref"));  //AttributeNumeric("ref_length",ref:len());
+    Attribute("ref", Find("ref"));
     return;
   }
 
@@ -495,32 +497,34 @@ void AscendTileBuilder::ProcessWay()
     } else if (natural == "valley" || natural == "gorge") {
       // special case since valleys are mapped as ways
       auto len = Length();
-      if (!SetMinZoomByArea(len*len)) { return; }
+      double area = isClosed ? Area() : len*len;
+      if (!SetMinZoomByArea(area)) { return; }
       Layer("landuse", false);
       Attribute("natural", natural);
       SetNameAttributes();
+      AttributeNumeric("area", area);  // to support filtering by length in scene file
       return;
     }
   }
 
   auto boundary = Find("boundary");
   if (boundary) {
-    // Parks ... possible for way to be both park boundary and landuse?
-    bool park_boundary = parkValues[boundary];
-    if (park_boundary || leisure == "nature_reserve") {
-      WriteProtectedArea();
-    }
-
     // Boundaries ... possible for way to be shared with park boundary or landuse?
     if (!feature().belongsToRelation() && boundaryValues[boundary]) {
       WriteBoundary();
+    }
+
+    bool park_boundary = parkValues[boundary];
+    if (park_boundary || leisure == "nature_reserve") {
+      WriteProtectedArea();
+      return;
     }
   }
 
   // we ignore place=village/town/etc. areas for now since most are mapped as nodes and default style on
   //  openstreetmap.org only renders those mapped as nodes
   auto place = Find("place");
-  if (place && (place == "island" || place == "islet")) {
+  if (placeAreas[place]) {
     if (!SetMinZoomByArea()) { return; }
     LayerAsCentroid("place");
     Attribute("place", place);
@@ -547,7 +551,9 @@ void AscendTileBuilder::ProcessWay()
     Attribute("tourism", tourism);
     if (natural == "wetland") { Attribute("wetland", Find("wetland")); }
     AttributeNumeric("area", Area());  // area is used to order smaller areas over larger areas
+    std::string access = Find("access");
     NewWritePOI(Area(), true);  //MinZoom(14));
+    Attribute("access", access);
     return;
   }
 
@@ -645,7 +651,8 @@ static const std::vector<ZMap> poiTags = {
   //archaeological_site = Set { "__EXCLUDE", "tumulus", "fortification", "megalith", "mineral_extraction", "petroglyph", "cairn" },
   ZMap("highway").add(12, { "bus_stop", "trailhead" }).add(14, { "traffic_signals" }),
   ZMap("railway").add(12, { "halt", "station", "tram_stop" }).add(14, { "subway_entrance", "train_station_entrance" }),
-  ZMap("natural").add(13, { "spring", "hot_spring", "fumarole", "geyser", "sinkhole", "arch", "cave_entrance", "saddle" }),
+  ZMap("natural").add(13, { "spring", "hot_spring", "fumarole", "geyser", "sinkhole", "arch",
+      "cave_entrance", "saddle", "cape" }),
   ZMap("barrier").add(14, { "bollard", "border_control",
       "cycle_barrier", "gate", "lift_gate", "sally_port", "stile", "toll_booth" }),
   ZMap("building").add(14, { "dormitory" }),
@@ -654,7 +661,7 @@ static const std::vector<ZMap> poiTags = {
 };
 
 static const std::vector<ZMap> extraPoiTags = { ZMap("cuisine"), ZMap("station"), ZMap("religion"),
-    ZMap("operator"), ZMap("archaeological_site"), ZMap("ref") };  // atm.operator; subway_entrance.ref
+    ZMap("operator"), ZMap("archaeological_site"), ZMap("ref"), ZMap("information") };  // atm.operator; subway_entrance.ref
 
 bool AscendTileBuilder::NewWritePOI(double area, bool force)
 {
@@ -683,7 +690,7 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
   // actual wikipedia/wikidata ref not useful w/o internet access, in which case we can just get from OSM
   if (wikipedia) { AttributeNumeric("wikipedia", 1); }
   else if (wikidata) { AttributeNumeric("wikidata", 1); }
-  if (heritage > 0 && hertiage <= 4) {
+  if (heritage > 0 && heritage <= 4) {
     AttributeNumeric("heritage", heritage);
     Attribute("heritage_operator", Find("heritage:operator"));
   }
@@ -772,6 +779,7 @@ void AscendTileBuilder::SetBuildingHeightAttributes()
 
   if(height > 0) { AttributeNumeric("height", height); }
   if(minHeight > 0) { AttributeNumeric("min_height", minHeight); }
+  Attribute("layer", Find("layer"));
 }
 
 void AscendTileBuilder::WriteAerodromePOI()
@@ -795,13 +803,16 @@ void AscendTileBuilder::WriteProtectedArea()
   if (Find("protection_title") == "National Forest"
       && Find("operator") == "United States Forest Service") { return; }  // too many
   auto boundary = Find("boundary");
-  auto leisure = Find("leisure");
   auto protect_class = Find("protect_class");
   // convert "access" to string since bool() will return false for access=no
   std::string access = Find("access");  // probably should just not write private areas
   Layer("landuse", true);
   Attribute("boundary", boundary);
-  Attribute("leisure", leisure);
+  Attribute("landuse", Find("landuse"));  // write landuse tags instead of duplicating feature
+  Attribute("natural", Find("natural"));
+  Attribute("leisure", Find("leisure"));
+  Attribute("amenity", Find("amenity"));
+  Attribute("tourism", Find("tourism"));
   Attribute("protect_class", protect_class);
   Attribute("access", access);
   SetNameAttributes();
