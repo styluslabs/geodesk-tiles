@@ -243,6 +243,7 @@ static const auto amenityAreas = Set { "school", "university", "kindergarten", "
     "hospital", "bus_station", "marketplace", "research_institute", "prison" };
 static const auto tourismAreas = Set { "zoo", "theme_park", "aquarium" };
 static const auto placeAreas = Set { "island", "islet", "archipelago" };
+static const auto naturalLines = Set { "valley", "gorge", "mountain_range" };
 
 static const auto waterwayClasses = Set { "stream", "river", "canal", "drain", "ditch" };
 static const auto waterwayAreas   = Set { "river", "riverbank", "stream", "canal", "drain", "ditch", "dock" };
@@ -261,6 +262,7 @@ static const ZMap otherRoutes =
 
 // bad coastline ways
 static std::unordered_set<int64_t> badCoastlines = {
+  27550479,  // fixed Jun 2025
   1223379640, 1283812165,  // fixed in OSM on 15 Apr 2025
   1198191751, 1198191752, 1198191749  // fixed in OSM (by me) 21 May 2025
 };
@@ -494,8 +496,8 @@ void AscendTileBuilder::ProcessWay()
       SetNameAttributes();
       AttributeNumeric("area", Area());
       return;
-    } else if (natural == "valley" || natural == "gorge") {
-      // special case since valleys are mapped as ways
+    } else if (naturalLines[natural]) {
+      // valleys, mountain ranges usually mapped as ways, but could be areas
       auto len = Length();
       double area = isClosed ? Area() : len*len;
       if (!SetMinZoomByArea(area)) { return; }
@@ -657,7 +659,8 @@ static const std::vector<ZMap> poiTags = {
       "cycle_barrier", "gate", "lift_gate", "sally_port", "stile", "toll_booth" }),
   ZMap("building").add(14, { "dormitory" }),
   ZMap("aerialway").add(14, { "station" }),
-  ZMap("waterway").add(13, { "waterfall" }).add(14, { "dock" })
+  ZMap("waterway").add(13, { "waterfall" }).add(14, { "dock" }),
+  ZMap("memorial").add(14, { "statue", "sculpture", "obelisk" })
 };
 
 static const std::vector<ZMap> extraPoiTags = { ZMap("cuisine"), ZMap("station"), ZMap("religion"),
@@ -686,6 +689,8 @@ bool AscendTileBuilder::NewWritePOI(double area, bool force)
   LayerAsCentroid("poi");
   SetNameAttributes();
   SetIdAttributes();
+  // provide area to help rank important POIs
+  if (area <= 0 && (wikidata || wikipedia) && feature().isArea()) { area = Area(); }
   if (area > 0) { AttributeNumeric("area", area); }
   // actual wikipedia/wikidata ref not useful w/o internet access, in which case we can just get from OSM
   if (wikipedia) { AttributeNumeric("wikipedia", 1); }
@@ -732,9 +737,16 @@ void AscendTileBuilder::SetEleAttributes()
 
 void AscendTileBuilder::SetBrunnelAttributes()
 {
-  if (Find("bridge") == "yes") { Attribute("brunnel", "bridge"); }
-  else if (Find("tunnel") == "yes") { Attribute("brunnel", "tunnel"); }
-  else if (Find("ford") == "yes") { Attribute("brunnel", "ford"); }
+  auto bridge = Find("bridge");
+  auto tunnel = Find("tunnel");
+  auto ford = Find("ford");
+  Attribute("bridge", bridge);
+  Attribute("tunnel", tunnel);
+  Attribute("ford", ford);
+  // brunnel
+  if (bridge == "yes") { Attribute("brunnel", "bridge"); }
+  else if (tunnel == "yes") { Attribute("brunnel", "tunnel"); }
+  else if (ford == "yes") { Attribute("brunnel", "ford"); }
 }
 
 // Set minimum zoom level by area
