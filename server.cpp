@@ -186,16 +186,14 @@ Optional arguments:
       strftime(timestr, sizeof(timestr), "%d/%b/%Y:%H:%M:%S %z", std::localtime(&t));
       auto body_bytes_sent = res.get_header_value("Content-Length");
       auto http_user_agent = req.get_header_value("User-Agent", "-");
-
-      std::string hdrs;
-      for (auto it = req.headers.begin(); it != req.headers.end(); ++it) {
-        hdrs += fstring("%s: %s; ", it->first.c_str(), it->second.c_str());
-      }
-
+      //std::string hdrs;
+      //for (auto it = req.headers.begin(); it != req.headers.end(); ++it) {
+      //  hdrs += fstring("%s: %s; ", it->first.c_str(), it->second.c_str());
+      //}
       // NGINX default access log format
-      logStream << fstring(R"(%s - - [%s] "%s %s %s" %d %s "-" "%s"\n)", req.remote_addr.c_str(),
+      logStream << fstring("%s - [%s] \"%s %s %s\" %d %s - \"%s\"\n", req.remote_addr.c_str(),
           /*remote_user,*/ timestr, req.method.c_str(), req.path.c_str(), req.version.c_str(), res.status,
-          body_bytes_sent.c_str(), hdrs.c_str());  // /*http_referer,*/ http_user_agent.c_str());
+          body_bytes_sent.c_str(), /*http_referer,*/ http_user_agent.c_str());
     });
   }
 
