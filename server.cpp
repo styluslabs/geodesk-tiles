@@ -1,6 +1,7 @@
 // Serve tiles from multiple mbtiles files, generating missing tiles on demand
 
 #include <map>
+#include <fstream>
 #include "tilebuilder.h"
 #define SQLITEPP_LOGE LOG
 #define SQLITEPP_LOGW LOG
@@ -76,6 +77,7 @@ int main(int argc, char* argv[])
   TileID topTile(-1, -1, -1);
   int maxZ = 14;
   std::string adminKey;
+  std::fstream logStream;
 
   int argi = 1;
   for(; argi < argc-1; argi += 2) {
@@ -98,6 +100,13 @@ int main(int argc, char* argv[])
       maxZ = atoi(argv[argi+1]);
     else if(strcmp(argv[argi], "--admin-key") == 0)
       adminKey = argv[argi+1];
+    else if(strcmp(argv[argi], "--log") == 0) {
+      logStream.open(argv[argi+1], std::fstream::app | std::fstream::out);
+      if(!logStream.is_open()) {
+        LOG("Error opening log file %s", argv[argi+1]);
+        return -2;
+      }
+    }
     else
       break;
   }
@@ -169,6 +178,26 @@ Optional arguments:
   }
 
   httplib::Server svr;  //httplib::SSLServer svr;
+
+  if(logStream.is_open()) {
+    svr.set_logger([&](const httplib::Request& req, const httplib::Response& res){
+      auto t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      char timestr[128];
+      strftime(timestr, sizeof(timestr), "%d/%b/%Y:%H:%M:%S %z", std::localtime(&t));
+      auto body_bytes_sent = res.get_header_value("Content-Length");
+      auto http_user_agent = req.get_header_value("User-Agent", "-");
+
+      std::string hdrs;
+      for (auto it = req.headers.begin(); it != req.headers.end(); ++it) {
+        hdrs += fstring("%s: %s; ", it->first.c_str(), it->second.c_str());
+      }
+
+      // NGINX default access log format
+      logStream << fstring(R"(%s - - [%s] "%s %s %s" %d %s "-" "%s"\n)", req.remote_addr.c_str(),
+          /*remote_user,*/ timestr, req.method.c_str(), req.path.c_str(), req.version.c_str(), res.status,
+          body_bytes_sent.c_str(), hdrs.c_str());  // /*http_referer,*/ http_user_agent.c_str());
+    });
+  }
 
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
     auto now = std::chrono::steady_clock::now();

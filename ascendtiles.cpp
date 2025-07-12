@@ -419,6 +419,8 @@ void AscendTileBuilder::ProcessWay()
     Attribute("maxspeed", Find("maxspeed"));
     Attribute("lanes", Find("lanes"));
     Attribute("ref", Find("ref"));
+    // check for POI for area, e.g. highway=rest_area
+    if (isClosed && highway != "platform") { NewWritePOI(); }
     return;
   }
 
@@ -628,9 +630,7 @@ void AscendTileBuilder::ProcessWay()
   }
 
   // use leisure/amenity/tourismArea above instead to include the area itself
-  if (isClosed) {
-    NewWritePOI();
-  }
+  if (isClosed) { NewWritePOI(); }
 }
 
 // POIs: moving toward including all values for key except common unwanted values
@@ -651,7 +651,7 @@ static const std::vector<ZMap> poiTags = {
   ZMap("landuse").add(14, { "basin", "brownfield", "cemetery", "reservoir", "winter_sports" }),
   ZMap("historic").add(14, { "monument", "castle", "ruins", "fort", "mine", "archaeological_site" }),
   //archaeological_site = Set { "__EXCLUDE", "tumulus", "fortification", "megalith", "mineral_extraction", "petroglyph", "cairn" },
-  ZMap("highway").add(12, { "bus_stop", "trailhead" }).add(14, { "traffic_signals" }),
+  ZMap("highway").add(12, { "bus_stop", "trailhead", "rest_area" }).add(14, { "traffic_signals" }),
   ZMap("railway").add(12, { "halt", "station", "tram_stop" }).add(14, { "subway_entrance", "train_station_entrance" }),
   ZMap("natural").add(13, { "spring", "hot_spring", "fumarole", "geyser", "sinkhole", "arch",
       "cave_entrance", "saddle", "cape" }),
