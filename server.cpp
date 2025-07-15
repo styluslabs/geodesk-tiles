@@ -66,7 +66,9 @@ static void sigint_handler(int s)
 
 int main(int argc, char* argv[])
 {
-  struct Stats_t { std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0; } stats;
+  struct Stats_t {
+    std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0, ofltiles = 0;
+  } stats;
 
   std::signal(SIGINT, sigint_handler);
 
@@ -206,8 +208,8 @@ Optional arguments:
     double cpudt = double(clock1 - clock0)/CLOCKS_PER_SEC;
     clock0 = clock1;
     // std::format not available in g++12!
-    auto statstr = fstring("Uptime: %.0f s\nCPU: %.3f s/%.3f s\nReqs: %lu\nReqs OK: %lu\nTiles built: %lu\nBytes out: %lu\n",
-        uptime, cpudt, dt, stats.reqs.load(), stats.reqsok.load(), stats.tilesbuilt.load(), stats.bytesout.load());
+    auto statstr = fstring("Uptime: %.0f s\nCPU: %.3f s/%.3f s\nReqs: %lu\nReqs OK: %lu\nOffline tile reqs: %lu\nTiles built: %lu\nBytes out: %lu\n",
+        uptime, cpudt, dt, stats.reqs.load(), stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load());
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
   });
@@ -292,6 +294,7 @@ Optional arguments:
     if(req.get_header_value("X-Hide-Encoding") != "yes") {
       res.set_header("Content-Encoding", "gzip");
     }
+    if(req.get_header_value("X-Tile-Priority") == "background") { ++stats.ofltiles; }
     return httplib::StatusCode::OK_200;
   });
 
