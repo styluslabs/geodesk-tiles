@@ -167,6 +167,10 @@ void AscendTileBuilder::ProcessNode()
     auto sqkm = Find("sqkm");
     if (sqkm) { AttributeNumeric("sqkm", double(sqkm)); }
     if (place == "country") { Attribute("iso_a2", Find("ISO3166-1:alpha2")); }
+    else if (place == "state") {
+      std::string iso2 = Find("ISO3166-2");
+      Attribute("ISO3166_2", iso2.substr(0, 2));  // keep only country code for now
+    }
     Attribute("place_CN", Find("place:CN"));
     SetNameAttributes();
     SetIdAttributes();

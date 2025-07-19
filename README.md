@@ -12,7 +12,7 @@ The GOL files can be created from OSM pbf files with the GeoDesk [GOL utility](h
 
 To create a pbf for ocean polygons, simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html can be converted with [ogr2osm](https://github.com/roelderickx/ogr2osm).  These are used for determining whether tiles without any coastline ways are ocean or land.  A prebuilt oceans GOL file is available in [releases](https://github.com/styluslabs/geodesk-tiles/releases/tag/tag-for-assets).
 
-Generated tiles are cached in an mbtiles file (i.e., an sqlite database containing map tiles), which can be set by the `--db` option (the default is planet.mbtiles).  An initial mbtiles file such as [this](https://github.com/styluslabs/maps/releases/download/alpha-1/basemap7.mbtiles) with low zoom tiles can be provided to avoid having to generate these.
+Generated tiles are cached in an mbtiles file (i.e., an sqlite database containing map tiles), which can be set by the `--db` option (the default is planet.mbtiles).
 
 Passing `--build z/x/y` to `server` will build the tile z/x/y and all children to z = 14, writing to planet.mbtiles, then exit.
 
@@ -28,6 +28,8 @@ Call `Find(<tag>)` to read feature tags.  The returned `geodesk::TagValue` objec
 Call `Layer(<layer name>)` or `LayerAsCentroid(<layer name>)` to add the current feature (or its centroid as a single point) to the tile, then call `Attribute(<key>, <value>)` and `AttributeNumeric(<key>, <value>)` to add attributes.
 
 Coastline ways (`natural=coastline`) should be passed to `addCoastline()` instead of being added to tile.  After all features are processed, ocean polygons will be generated and `processFeature()` called with no feature set - in this case it should call `Layer()` and `Attribute()` as appropriate for ocean features.
+
+For low zoom tiles, the features to be processed should be limited by populating `TileBuilder::m_queries` with a list of GeoDesk queries (which should reference only indexed keys).
 
 [ascendtiles.cpp](ascendtiles.cpp) (a direct translation of the tilemaker script [process.lua](https://github.com/styluslabs/maps/blob/master/scripts/tilemaker/process.lua)) implements the [Ascend Maps](https://github.com/styluslabs/maps/) schema, which mostly just uses unmodified OSM tags for feature attributes.  Adapting for other schemas should be relatively straightforward.
 
