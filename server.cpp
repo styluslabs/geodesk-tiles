@@ -67,7 +67,8 @@ static void sigint_handler(int s)
 int main(int argc, char* argv[])
 {
   struct Stats_t {
-    std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0, ofltiles = 0;
+    std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0, ofltiles = 0,
+        reqscached = 0, nscached = 0, nsbuilt = 0;
   } stats;
 
   std::signal(SIGINT, sigint_handler);
@@ -207,15 +208,29 @@ Optional arguments:
     clock_t clock1 = clock();
     double cpudt = double(clock1 - clock0)/CLOCKS_PER_SEC;
     clock0 = clock1;
+    double dtcache = (stats.nscached.load()*1.E-6)/stats.reqscached.load();
+    double dtbuilt = (stats.nsbuilt.load()*1.E-6)/(stats.reqsok.load() - stats.reqscached.load());
     // std::format not available in g++12!
-    auto statstr = fstring("Uptime: %.0f s\nCPU: %.3f s/%.3f s\nReqs: %lu\nReqs OK: %lu\nOffline tile reqs: %lu\nTiles built: %lu\nBytes out: %lu\n",
-        uptime, cpudt, dt, stats.reqs.load(), stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load());
+    const char* statfmt =
+R"(Uptime: %.0f s
+CPU: %.3f s/%.3f s
+Avg response (cached): %.3f ms
+Avg response (built): %.3f ms
+Reqs: %lu
+Reqs OK: %lu
+Offline tile reqs: %lu
+Tiles built: %lu
+Bytes out: %lu
+)";
+    auto statstr = fstring(statfmt, uptime, cpudt, dt, dtcache, dtbuilt, stats.reqs.load(),
+        stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load());
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
   });
 
   svr.Get("/v1/:z/:x/:y", [&](const httplib::Request& req, httplib::Response& res) {
     LOGD("Request %s\n", req.path.c_str());
+    auto t0req = std::chrono::steady_clock::now();
     ++stats.reqs;
     const char* zstr = req.path_params.at("z").c_str();
     const char* xstr = req.path_params.at("x").c_str();
@@ -238,6 +253,7 @@ Optional arguments:
       worldDB.getTile = worldDB.stmt(getTileSQL);
     }
 
+    bool iscached = false;
     // X-Rebuild-Tile header to force tile rebuild (w/ valid admin key)
     if(!adminKey.empty() && req.has_header("X-Rebuild-Tile") && req.get_header_value("X-Admin-Key") == adminKey) {}
     else {
@@ -245,6 +261,8 @@ Optional arguments:
         const char* blob = (const char*) sqlite3_column_blob(stmt, 0);
         const int length = sqlite3_column_bytes(stmt, 0);
         res.set_content(blob, length, "application/vnd.mapbox-vector-tile");
+        ++stats.reqscached;
+        iscached = true;
       });
     }
     // small chance that we could repeat tile build, but don't want to keep mutex locked during DB query
@@ -295,6 +313,13 @@ Optional arguments:
       res.set_header("Content-Encoding", "gzip");
     }
     if(req.get_header_value("X-Tile-Priority") == "background") { ++stats.ofltiles; }
+
+    // response time stats
+    auto t1req = std::chrono::steady_clock::now();
+    auto dtreq = uint64_t(1E9*std::chrono::duration<double>(t1req - t0req).count());
+    if (iscached) { stats.nscached += dtreq; }
+    else { stats.nsbuilt += dtreq; }
+
     return httplib::StatusCode::OK_200;
   });
 
