@@ -15,6 +15,8 @@
 
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
+extern int buildSearchIndex(const Features& world);
+
 // WAL allows simultaneous reading and writing
 static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
 BEGIN;
@@ -42,6 +44,23 @@ public:
 
 thread_local TileDB worldDB;
 
+static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, props FROM pois_fts JOIN pois ON"
+    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY rank LIMIT 50 OFFSET ?;";
+//static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, rank, props FROM pois_fts JOIN pois ON"
+//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, lng, lat) LIMIT 50 OFFSET ?;";
+//static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, props FROM pois_fts JOIN pois ON"
+//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, lng, lat) LIMIT 50 OFFSET ?;";
+
+class SearchDB : public SQLiteDB
+{
+public:
+  SQLiteStmt searchNoDist = {NULL};
+  //SQLiteStmt searchDist = {NULL};
+  //SQLiteStmt searchOnlyDist = {NULL};
+};
+
+thread_local SearchDB searchDB;
+
 // sigwait would be an alternative approach
 static std::function<void()> onSigInt;
 static void sigint_handler(int s)
@@ -68,19 +87,21 @@ int main(int argc, char* argv[])
 {
   struct Stats_t {
     std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0, ofltiles = 0,
-        reqscached = 0, nscached = 0, nsbuilt = 0;
+        reqscached = 0, searchok = 0, nscached = 0, nsbuilt = 0, nssearch = 0;
   } stats;
 
   std::signal(SIGINT, sigint_handler);
 
   // defaults
   const char* worldDBPath = "planet.mbtiles";
+  const char* searchDBPath = "fts.sqlite";
   int tcpPort = 8080;
   int numBuildThreads = std::max(2U, std::thread::hardware_concurrency()) - 1;
   TileID topTile(-1, -1, -1);
   int maxZ = 14;
   std::string adminKey;
   std::fstream logStream;
+  bool buildFTS = false;
 
   int argi = 1;
   for(; argi < argc-1; argi += 2) {
@@ -110,6 +131,10 @@ int main(int argc, char* argv[])
         return -2;
       }
     }
+    else if(strcmp(argv[argi], "--ftsdb") == 0)
+      searchDBPath = argv[argi+1];
+    else if(strcmp(argv[argi], "--buildfts") == 0)
+      buildFTS = true;
     else
       break;
   }
@@ -129,6 +154,10 @@ Optional arguments:
   Features worldGOL(argv[argi]);
   Features oceanGOL(argv[argi+1]);
   LOG("Loaded %s and %s", argv[argi], argv[argi+1]);
+
+  if(buildFTS) {
+    return buildSearchIndex(worldGOL);
+  }
 
   TileBuilder::worldFeats = &worldGOL;
   // ... separate queues for high zoom and low zoom (slower build)?
@@ -225,6 +254,49 @@ Bytes out: %lu
     auto statstr = fstring(statfmt, uptime, cpudt, dt, dtcache, dtbuilt, stats.reqs.load(),
         stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load());
     res.set_content(statstr, "text/plain");
+    return httplib::StatusCode::OK_200;
+  });
+
+  svr.Get("/search", [&](const httplib::Request& req, httplib::Response& res) {
+    if(!searchDB.db) {
+      if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
+        LOG("Error opening search DB on http worker thread!");
+        return httplib::StatusCode::ServiceUnavailable_503;
+      }
+      searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
+    }
+
+    auto t0req = std::chrono::steady_clock::now();
+    auto qit = req.params.find("q");
+    if(qit == req.params.end()) { return httplib::StatusCode::BadRequest_400; }
+    const std::string& query = qit->second;
+    //auto it = req.params.find("offset");
+    int offset = 0;
+
+    // words containing any special characters need to be quoted, so just quote every word (and make AND
+    //  operation explicit)
+    auto words = splitStr<std::vector>(query, " ", true);
+    std::string searchStr = "\"" + joinStr(words, "\" AND \"") + "\"*";
+
+    std::string json;
+    json.reserve(65536);
+    bool ok = searchDB.searchNoDist
+        .bind(searchStr, offset)
+        .exec([&](int rowid, double lng, double lat, double score, const char* tags){
+          json.append(json.empty() ? "[ " : ", ");
+          json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": )#", lng, lat, score));
+          json.append(tags).append("}");
+        });
+
+    if(!ok) { return httplib::StatusCode::InternalServerError_500; }
+    json.append(json.empty() ? "[]" : " ]");
+    res.set_content(std::move(json), "application/json");
+
+    auto t1req = std::chrono::steady_clock::now();
+    auto dtreq = uint64_t(1E9*std::chrono::duration<double>(t1req - t0req).count());
+    stats.nssearch += dtreq;
+    ++stats.searchok;
+
     return httplib::StatusCode::OK_200;
   });
 

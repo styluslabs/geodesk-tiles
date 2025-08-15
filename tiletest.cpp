@@ -2,6 +2,8 @@
 
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
+extern int buildSearchIndex(const Features& world);
+
 int main(int argc, char* argv[])
 {
   if(argc < 3) {
@@ -14,6 +16,9 @@ int main(int argc, char* argv[])
   LOG("Loaded %s and %s", argv[1], argv[2]);
 
   TileBuilder::worldFeats = &world;
+
+  buildSearchIndex(world);
+  return 0;
 
   // for(int x = 2616; x <= 2621; ++x) {
   //   for(int y = 6331; y <= 6336; ++y) {

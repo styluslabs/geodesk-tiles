@@ -105,6 +105,37 @@ inline ThreadPool::~ThreadPool()
     worker.join();
 }
 
+// stringutils.h
+
+template<template<class, class...> class Container, class... Container_Params>
+Container<std::string, Container_Params... > splitStr(std::string s, const char* delims, bool skip_empty = false)
+{
+  Container<std::string, Container_Params... > elems;
+  size_t start = 0, end = 0;
+  while((end = s.find_first_of(delims, start)) != std::string::npos) {
+    if(!skip_empty || end > start)
+      elems.insert(elems.end(), s.substr(start, end-start));
+    start = end + 1;
+  }
+  if(start < s.size())
+    elems.insert(elems.end(), s.substr(start));
+  return elems;
+}
+
+std::string joinStr(const std::vector<std::string>& strs, const char* sep)
+{
+  if(strs.size() < 2) { return strs.empty() ? std::string() : strs[0]; }
+  size_t tot = (strs.size() - 1)*strlen(sep);
+  for(auto& s : strs) { tot += s.size(); }
+  std::string res;
+  res.reserve(tot);
+  res.append(strs[0]);
+  for(size_t ii = 1; ii < strs.size(); ++ii) {
+    res.append(sep).append(strs[ii]);
+  }
+  return res;
+}
+
 // fstring
 
 inline std::string fstring(const char* fmt, ...)

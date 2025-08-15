@@ -26,7 +26,7 @@ MODULE_BASE = sqlite3
 
 MODULE_SOURCES = sqlite3.c
 MODULE_INC_PUBLIC = .
-#MODULE_DEFS_PRIVATE = SQLITE_ENABLE_FTS5
+MODULE_DEFS_PRIVATE = SQLITE_ENABLE_FTS5
 MODULE_DEFS_PUBLIC = SQLITE_USE_URI=1
 
 include $(ADD_MODULE)
@@ -61,6 +61,7 @@ MODULE_SOURCES = \
   visvalingam.cpp \
   tilebuilder.cpp \
   ascendtiles.cpp \
+  ftsbuilder.cpp \
   $(MAIN_SOURCE)
 
 MODULE_INC_PRIVATE = \
