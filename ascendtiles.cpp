@@ -259,7 +259,7 @@ static const auto aerowayBuildings = Set { "terminal", "gate", "tower" };
 //static const auto aerodromeValues = Set { "international", "public", "regional", "military", "private" };
 
 static const ZMap transitRoutes =
-    { {"train", 8}, {"subway", 10}, {"tram", 12}, {"share_taxi", 12}, {"light_rail", 12}, {"bus", 14}, {"trolleybus", 14} };
+    { {"train", 8}, {"subway", 10}, {"tram", 12}, {"share_taxi", 12}, {"light_rail", 12}, {"bus", 13}, {"trolleybus", 13} };
 static const ZMap otherRoutes =
     { {"road", 8}, {"ferry", 9}, {"bicycle", 10}, {"hiking", 10}, {"foot", 12}, {"mtb", 10}, {"ski", 12} };  //piste = 12;,
 //ignoredRoutes = Set { "power", "railway", "detour", "tracks", "horse", "emergency_access", "snowmobile", "historic", "running", "fitness_trail" }

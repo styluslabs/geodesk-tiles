@@ -25,7 +25,7 @@ CREATE TABLE pois(name TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);)#";
 static const char* POI_FTS_SCHEMA = R"#(BEGIN;
 CREATE VIRTUAL TABLE pois_fts USING fts5(name, tags, content='pois');
 
--- triggers to keep the FTS index up to date ... not used for whole-world search index
+-- triggers to keep the FTS index up-to-date
 CREATE TRIGGER pois_insert AFTER INSERT ON pois BEGIN
   INSERT INTO pois_fts(rowid, name, tags) VALUES (NEW.rowid, NEW.name, NEW.tags);
 END;
@@ -53,6 +53,9 @@ static void addJson(std::string& json, const std::string& key, const std::string
 // we expect FTS index creation to take longer than iterating features, so not much benefit from multithreading
 int buildSearchIndex(const Features& world)
 {
+  static std::vector<std::string> poiTags = { "place", "natural", "amenity", "leisure", "tourism", "building",
+      "waterway", "shop", "sport", "landuse", "historic", "highway", "railway", "aerialway", "memorial" };
+
   static const Features* worldFeats;
   worldFeats = &world;
 
@@ -64,10 +67,15 @@ int buildSearchIndex(const Features& world)
 
   if(!searchDB.exec(POI_SCHEMA)) { return -1; }
 
+  if(!searchDB.exec(POI_FTS_SCHEMA)) {
+    LOG("Error creating FTS index");
+    return -1;
+  }
+
   char const* insertPOISQL = "INSERT INTO pois (name,tags,props,lng,lat) VALUES (?,?,?,?,?);";
   SQLiteStmt insertPOI = searchDB.stmt(insertPOISQL);
 
-  Features pois = world("n[place=*]");
+  Features pois = world("na[name]");  //"n[place=*]"
 
   auto t0 = std::chrono::steady_clock::now();
   std::string props;
@@ -79,12 +87,23 @@ int buildSearchIndex(const Features& world)
     std::string name_en = readTag(f, "name:en");
     std::string names = !name_en.empty() ? name + " " + name_en : name;
 
+    std::string maintag;
+    for(auto& tag : poiTags) {
+      auto val = f[tag.key];
+      if(val) {
+        maintag = val;
+        break;
+      }
+    }
+
     addJson(props, "osm_id", std::to_string(f.id()));
     addJson(props, "osm_type", f.isWay() ? "way" : f.isNode() ? "node" : "relation");
     addJson(props, "name", name);
     addJson(props, "name:en", name_en);
 
-    addJson(props, "place", readTag(f, "place"));
+    //addJson(props, "place", readTag(f, "place"));
+
+    addJson(props, "type", maintag);
 
     props.append(" }");
 
@@ -103,12 +122,8 @@ int buildSearchIndex(const Features& world)
     }
   }
   searchDB.exec("COMMIT;");
-  LOGT(t0, "pois table built (%ld features), creating FTS index...", nfeats);
+  LOGT(t0, "pois table built (%ld features)", nfeats);
 
-  if(!searchDB.exec(POI_FTS_SCHEMA)) {
-    LOG("Error creating FTS index");
-    return -1;
-  }
-  LOGT(t0, "Exiting...");
+  //LOGT(t0, "Exiting...");
   return 0;
 }

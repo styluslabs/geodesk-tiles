@@ -361,7 +361,9 @@ Bytes out: %lu
         return httplib::StatusCode::RequestTimeout_408;  // 504 would be more correct
       }
       const std::string& mvt = fut.get();
-      if(mvt.empty()) { return httplib::StatusCode::NotFound_404; }
+      // Return and save tile even if empty (to prevent repeated build attempts and so Tangram doesn't show
+      //  z-1 proxy tile
+      //if(mvt.empty()) { return httplib::StatusCode::NotFound_404; }
       if(savetile) {
         // note that capturing mvt by ref copies the ref (no such thing as ref to ref), so lifetime is
         //  that of the shared_future holding the actual string (see C++20 standard 7.5.5.2 para. 13)
