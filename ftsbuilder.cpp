@@ -53,8 +53,8 @@ static void addJson(std::string& json, const std::string& key, const std::string
 // we expect FTS index creation to take longer than iterating features, so not much benefit from multithreading
 int buildSearchIndex(const Features& world)
 {
-  static std::vector<std::string> poiTags = { "place", "natural", "amenity", "leisure", "tourism", "building",
-      "waterway", "shop", "sport", "landuse", "historic", "highway", "railway", "aerialway", "memorial" };
+  static std::vector<std::string> poiTags = { "place", "natural", "amenity", "leisure", "tourism", "historic",
+      "waterway", "shop", "sport", "landuse", "highway", "building", "railway", "aerialway", "memorial", "cuisine" };
 
   static const Features* worldFeats;
   worldFeats = &world;
@@ -87,12 +87,13 @@ int buildSearchIndex(const Features& world)
     std::string name_en = readTag(f, "name:en");
     std::string names = !name_en.empty() ? name + " " + name_en : name;
 
-    std::string maintag;
+    std::string tags;  //std::string maintag;
     for(auto& tag : poiTags) {
       auto val = f[tag.key];
       if(val) {
-        maintag = val;
-        break;
+        //if(maintag.empty()) { maintag = val; }
+        if(!tags.empty()) { tags += ' '; }
+        tags.append(val);
       }
     }
 
@@ -100,18 +101,16 @@ int buildSearchIndex(const Features& world)
     addJson(props, "osm_type", f.isWay() ? "way" : f.isNode() ? "node" : "relation");
     addJson(props, "name", name);
     addJson(props, "name:en", name_en);
-
     //addJson(props, "place", readTag(f, "place"));
-
-    addJson(props, "type", maintag);
-
+    //addJson(props, "population", readTag(f, "population"));
+    //addJson(props, "type", maintag);
     props.append(" }");
 
     auto coords = f.xy();
     double lng = Mercator::lonFromX(coords.x);
     double lat = Mercator::latFromY(coords.y);
 
-    insertPOI.bind(names, "", props, lng, lat).exec();
+    insertPOI.bind(names, tags, props, lng, lat).exec();
     props.clear();
 
     ++nfeats;
@@ -126,4 +125,52 @@ int buildSearchIndex(const Features& world)
 
   //LOGT(t0, "Exiting...");
   return 0;
+}
+
+void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv)
+{
+  static std::unordered_map<std::string, int> tagOrder = [](){
+    std::unordered_map<std::string, int> res;
+    const char* tags[] = { "country", "state", "province", "city", "town", "island", "suburb", "quarter",
+        "neighbourhood", "district", "borough", "municipality", "village", "hamlet", "county", "locality", "islet" };
+    int ntags = sizeof(tags)/sizeof(tags[0]);
+    for(int ii = 0; ii < ntags; ++ii) {
+      res.insert(tags[ii], ntags - ii);
+    }
+    return res;
+  };
+
+  if(argc < 2) {
+    sqlite3_result_error(context, "osmSearchRank - Invalid number of arguments (2 or 6 required).", -1);
+    return;
+  }
+  if(sqlite3_value_type(argv[0]) != SQLITE_FLOAT || sqlite3_value_type(argv[1]) != SQLITE_TEXT) {
+    sqlite3_result_double(context, -1.0);
+    return;
+  }
+  // sqlite FTS5 rank is roughly -1*number_of_words_in_query; ordered from -\inf to 0
+  double rank = sqlite3_value_double(argv[0]);
+  const char* tags = sqlite3_value_text(argv[1]);
+
+  const char* tagend = tags;
+  while(*tagend && *tagend != ' ') { ++tagend; }
+  if(*tagend != tags) {
+    auto it = tagOrder.find(std::string(tags, tagend));
+    if(it != tagOrder.end()) {
+      rank -= it->second/100;  // adjust rank to break ties
+    }
+  }
+
+  if(argc < 6 || sqlite3_value_type(argv[2]) != SQLITE_FLOAT || sqlite3_value_type(argv[3]) != SQLITE_FLOAT
+      || sqlite3_value_type(argv[4]) != SQLITE_FLOAT || sqlite3_value_type(argv[5]) != SQLITE_FLOAT) {
+    sqlite3_result_double(context, rank);
+    return;
+  }
+  double lon0 = sqlite3_value_double(argv[2]);
+  double lat0 = sqlite3_value_double(argv[3]);
+  double lon = sqlite3_value_double(argv[4]);
+  double lat = sqlite3_value_double(argv[5]);
+  double dist = lngLatDist(LngLat(lon0, lat0), LngLat(lon, lat));  // in kilometers
+  // obviously will want a more sophisticated ranking calculation in the future
+  sqlite3_result_double(context, rank/log2(1+dist));
 }

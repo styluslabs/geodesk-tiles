@@ -16,6 +16,7 @@
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
 extern int buildSearchIndex(const Features& world);
+extern void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv);
 
 // WAL allows simultaneous reading and writing
 static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
@@ -44,11 +45,11 @@ public:
 
 thread_local TileDB worldDB;
 
-static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, props FROM pois_fts JOIN pois ON"
-    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY rank LIMIT 50 OFFSET ?;";
-//static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, rank, props FROM pois_fts JOIN pois ON"
+static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
+    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, pois.tags) LIMIT 50 OFFSET ?;";
+//static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
 //    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, lng, lat) LIMIT 50 OFFSET ?;";
-//static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, props FROM pois_fts JOIN pois ON"
+//static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
 //    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, lng, lat) LIMIT 50 OFFSET ?;";
 
 class SearchDB : public SQLiteDB
@@ -264,6 +265,11 @@ Bytes out: %lu
         return httplib::StatusCode::ServiceUnavailable_503;
       }
       searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
+
+      if(sqlite3_create_function(searchDB.db, "osmSearchRank", 3, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
+        LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
+        return httplib::StatusCode::InternalServerError_500;
+      }
     }
 
     auto t0req = std::chrono::steady_clock::now();
@@ -282,10 +288,10 @@ Bytes out: %lu
     json.reserve(65536);
     bool ok = searchDB.searchNoDist
         .bind(searchStr, offset)
-        .exec([&](int rowid, double lng, double lat, double score, const char* tags){
+        .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
           json.append(json.empty() ? "[ " : ", ");
-          json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": )#", lng, lat, score));
-          json.append(tags).append("}");
+          json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
+          json.append(props).append("}");
         });
 
     if(!ok) { return httplib::StatusCode::InternalServerError_500; }
