@@ -1,4 +1,5 @@
 #include <geodesk/geodesk.h>
+#include "tileId.h"
 
 #define LOG(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
 #define LOGT(t0, fmt, ...) do { \
@@ -127,6 +128,13 @@ int buildSearchIndex(const Features& world)
   return 0;
 }
 
+static double lngLatDist(LngLat r1, LngLat r2)
+{
+  constexpr double p = 3.14159265358979323846/180;
+  double a = 0.5 - cos((r2.latitude-r1.latitude)*p)/2 + cos(r1.latitude*p) * cos(r2.latitude*p) * (1-cos((r2.longitude-r1.longitude)*p))/2;
+  return 12742 * asin(sqrt(a));  // kilometers
+}
+
 void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv)
 {
   static std::unordered_map<std::string, int> tagOrder = [](){
@@ -173,4 +181,111 @@ void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv)
   double dist = lngLatDist(LngLat(lon0, lat0), LngLat(lon, lat));  // in kilometers
   // obviously will want a more sophisticated ranking calculation in the future
   sqlite3_result_double(context, rank/log2(1+dist));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+FTSBuilder::FTSBuilder(TileID _id) : m_id(_id)
+{
+  double units = Mercator::MAP_WIDTH/MapProjection::EARTH_CIRCUMFERENCE_METERS;
+  m_origin = units*MapProjection::tileSouthWestCorner(m_id);
+  m_scale = 1/(units*MapProjection::metersPerTileAtZoom(m_id.z));
+}
+
+void TileBuilder::setFeature(Feature& feat)
+{
+  m_feat = &feat;
+  m_area = NAN;
+  m_featMPoly.clear();
+  m_featId = feat.id();  // save id for debugging
+}
+
+std::string TileBuilder::build(const Features& world, const Features& ocean, bool compress)
+{
+  m_tileBox = tileBox(m_id);  //, eps);
+  Features tileFeats = world(m_tileBox);
+  m_tileFeats = &tileFeats;
+  int nfeats = 0;
+
+  auto dispatchFeatures = [&](const Features& feats, bool isOcean = false){
+    for(Feature f : feats) {
+      setFeature(f);
+      processFeature();
+      ++nfeats;
+    }
+  };
+
+  struct AdminMPoly { int level; std::string name, name_en; vt_multi_polygon mpoly; };
+  std::vector<AdminMPoly> adminMPolys;
+
+  const char* adminquery = "wra[boundary=administrative,disputed]";
+  for(Feature f : tileFeats(adminquery)) {
+
+
+    auto admintag = readTag(f, "admin_level");
+    if(!admintag) { continue; }
+    admin = double(admintag);
+    if(admin < 2 || admin > 8) { continue; }
+    setFeature(f);
+    loadAreaFeature();
+
+    for(const vt_polygon& poly : m_featMPoly) {
+      if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
+
+      std::string name = readTag(f, "name");
+      if(name.empty()) { continue; }
+      std::string name_en = readTag(f, "name:en");
+      std::string names = !name_en.empty() ? name + " " + name_en : name;
+
+      bool coverstile = poly.size() == 1 && covers(poly.front());
+      adminMPolys.push_back({admin, name, name_en, coverstile ? vt_multi_polygon{} : poly});
+    }
+
+
+  }
+  std::sort(adminMPolys.begin(), adminMPolys.end(),
+      [](const AdminMPoly& a, const AdminMPoly& b){ return a.level < b.level; });
+
+  for(Feature f : pois) {
+    //...
+    for(auto& mp : adminMPolys) {
+      if(pointInPolygon(mp.mpoly, f.xy())) {
+        if(!adminfts.empty()) { adminfts += ' '; }
+        adminfts.append(mp.names);
+
+        if(!admin.empty()) { admin += ', '; }
+        admin.append(!mp.name_en.empty() ? mp.name_en : mp.name);
+
+
+
+      }
+    }
+    //...
+  }
+
+  // how to keep track of polygons?
+  // list of name, polygon pairs
+
+  // check if
+
+
+  //
+
+
+  m_tileFeats = nullptr;
+
+
+  return mvt;
 }
