@@ -34,6 +34,7 @@ class TileBuilder
 public:
   static Features* worldFeats;
   static CodedString getCodedString(std::string_view s);
+  static Box tileBox(const TileID& id, double eps = 0.0);
 
   geodesk::Box m_tileBox;
   Features* m_tileFeats = nullptr;

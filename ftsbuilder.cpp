@@ -1,48 +1,146 @@
 #include <geodesk/geodesk.h>
-#include "tileId.h"
+#include "tilebuilder.h"
+#include "ulib.h"
 
-#define LOG(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
-#define LOGT(t0, fmt, ...) do { \
-  auto t1 = std::chrono::steady_clock::now(); \
-  double dt = std::chrono::duration<double>(t1 - t0).count(); \
-  fprintf(stderr, "+%.3f s: " fmt "\n", dt, ## __VA_ARGS__); \
-} while(0);
+//#define LOGT(t0, fmt, ...) do { \
+//  auto t1 = std::chrono::steady_clock::now(); \
+//  double dt = std::chrono::duration<double>(t1 - t0).count(); \
+//  fprintf(stderr, "+%.3f s: " fmt "\n", dt, ## __VA_ARGS__); \
+//} while(0);
 
 #define SQLITEPP_LOGE LOG
 #define SQLITEPP_LOGW LOG
 #include "sqlitepp.h"
 
-using geodesk::Feature;
-using geodesk::Features;
-using geodesk::Mercator;
-using geodesk::Coordinate;
-using geodesk::TagValue;
+// search index query
 
-// search index build
+static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
+    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, pois.tags) LIMIT 50 OFFSET ?;";
+//static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
+//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, lng, lat) LIMIT 50 OFFSET ?;";
+//static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
+//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, lng, lat) LIMIT 50 OFFSET ?;";
+
+class SearchDB : public SQLiteDB
+{
+public:
+  SQLiteStmt searchNoDist = {NULL};
+  //SQLiteStmt searchDist = {NULL};
+  //SQLiteStmt searchOnlyDist = {NULL};
+  SQLiteStmt insertPOI = {NULL};
+};
+
+thread_local SearchDB searchDB;
 
 static const char* POI_SCHEMA = R"#(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
-CREATE TABLE pois(name TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);)#";
+CREATE TABLE pois(name TEXT, admin TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);)#";
 
 static const char* POI_FTS_SCHEMA = R"#(BEGIN;
-CREATE VIRTUAL TABLE pois_fts USING fts5(name, tags, content='pois');
+CREATE VIRTUAL TABLE pois_fts USING fts5(name, admin, tags, content='pois');
 
 -- triggers to keep the FTS index up-to-date
 CREATE TRIGGER pois_insert AFTER INSERT ON pois BEGIN
-  INSERT INTO pois_fts(rowid, name, tags) VALUES (NEW.rowid, NEW.name, NEW.tags);
+  INSERT INTO pois_fts(rowid, name, admin, tags) VALUES (NEW.rowid, NEW.name, NEW.admin, NEW.tags);
 END;
 CREATE TRIGGER pois_delete AFTER DELETE ON pois BEGIN
-  INSERT INTO pois_fts(pois_fts, rowid, name, tags) VALUES ('delete', OLD.rowid, OLD.name, OLD.tags);
+  INSERT INTO pois_fts(pois_fts, rowid, name, admin, tags) VALUES ('delete', OLD.rowid, OLD.name, OLD.admin, OLD.tags);
 END;
 CREATE TRIGGER pois_update AFTER UPDATE ON pois BEGIN
-  INSERT INTO pois_fts(pois_fts, rowid, name, tags) VALUES ('delete', OLD.rowid, OLD.name, OLD.tags);
-  INSERT INTO pois_fts(rowid, name, tags) VALUES (NEW.rowid, NEW.name, NEW.tags);
+  INSERT INTO pois_fts(pois_fts, rowid, name, admin, tags) VALUES ('delete', OLD.rowid, OLD.name, OLD.admin, OLD.tags);
+  INSERT INTO pois_fts(rowid, name, admin, tags) VALUES (NEW.rowid, NEW.name, NEW.admin, NEW.tags);
 END;
 COMMIT;)#";
 
-// options: iterate over every feature in GOL
-// start with only place=* nodes for testing
+struct PoiRow { std::string names, admin, tags, props; double lng, lat; };
 
-#define readTag(feat, s) feat[ ( [](){ static geodesk::Key cs = worldFeats->key(s); return cs; }() ) ]
+class FTSBuilder : public TileBuilder {
+public:
+  FTSBuilder(TileID _id);
+  std::vector<PoiRow> index(const Features& world);
+};
+
+// we expect FTS index creation to take longer than iterating features, so not much benefit from multithreading
+// ... probably no longer true with admin boundary processing
+
+static std::vector<PoiRow> indexTile(const Features& world, TileID id)
+{
+  FTSBuilder ftsBuilder(id);
+  try {
+    return ftsBuilder.index(world);
+  }
+  catch(std::exception &e) {
+    int64_t fid = ftsBuilder.m_feat ? ftsBuilder.m_featId : -1;  //tileBuilder.feature().id() : -1;
+    LOG("Exception indexing tile %s (feature id %ld): %s", id.toString().c_str(), fid, e.what());
+    return {};
+  }
+}
+
+int buildSearchIndex(const Features& worldGOL, const std::string& searchDBPath)
+{
+  int numThreads = std::max(2U, std::thread::hardware_concurrency()) - 1;
+  ThreadPool indexWorkers(numThreads);
+  ThreadPool dbWriter(1);  // ThreadPool(1) is like AsyncWorker
+  //searchDBPath = "fts_wip.sqlite";
+
+  auto dbfut = dbWriter.enqueue([&](){
+    if(searchDB.open(searchDBPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) {
+      LOG("Error opening search DB");
+      return false;
+    }
+    if(!searchDB.exec(POI_SCHEMA)) { return false; }
+    if(!searchDB.exec(POI_FTS_SCHEMA)) {
+      LOG("Error creating FTS index");
+      return false;
+    }
+    char const* insertPOISQL = "INSERT INTO pois (name,tags,props,lng,lat) VALUES (?,?,?,?,?);";
+    searchDB.insertPOI = searchDB.stmt(insertPOISQL);
+    return true;
+  });
+  if(!dbfut.get()) {
+    LOG("Error opening world mbtiles %s\n", searchDBPath.c_str());
+    return -1;
+  }
+
+  auto time0 = std::chrono::steady_clock::now();
+  std::function<void(TileID)> buildFn = [&](TileID id){
+    if(id.z == 4) {
+      auto t1 = std::chrono::steady_clock::now();
+      double dt = std::chrono::duration<double>(t1 - time0).count();
+      LOG("+%.0fs: processing %s", dt, id.toString().c_str());
+    }
+    if(id.z < 4 || (id.z < 8 && worldGOL(TileBuilder::tileBox(id)).count() > 65535)) {
+      for(int ii = 0; ii < 4; ++ii)
+        indexWorkers.enqueue(buildFn, id.getChild(ii, 8));
+      return;
+    }
+
+    std::vector<PoiRow> rows = indexTile(worldGOL, id);
+    if(!rows.empty()) {
+      dbWriter.enqueue([&, rows = std::move(rows), id](){
+        searchDB.exec("BEGIN;");
+        for(auto& r : rows) {
+          if(!searchDB.insertPOI.bind(r.names, r.admin, r.tags, r.props, r.lng, r.lat).exec())
+            LOG("Error adding row to search DB: %s", searchDB.errMsg());
+        }
+        searchDB.exec("COMMIT;");
+      });
+    }
+
+  };
+  //onSigInt = [&](){ buildWorkers.requestStop(true); };
+  indexWorkers.enqueue(buildFn, TileID(0, 0, 0));
+  indexWorkers.waitForIdle();
+  dbWriter.waitForIdle();
+  return 0;
+}
+
+FTSBuilder::FTSBuilder(TileID _id)
+{
+  m_id = _id;
+  double units = Mercator::MAP_WIDTH/MapProjection::EARTH_CIRCUMFERENCE_METERS;
+  m_origin = units*MapProjection::tileSouthWestCorner(m_id);
+  m_scale = 1/(units*MapProjection::metersPerTileAtZoom(m_id.z));
+}
 
 static void addJson(std::string& json, const std::string& key, const std::string& val)
 {
@@ -51,44 +149,58 @@ static void addJson(std::string& json, const std::string& key, const std::string
   json.append("\"").append(key).append("\": \"").append(val).append("\"");
 }
 
-// we expect FTS index creation to take longer than iterating features, so not much benefit from multithreading
-int buildSearchIndex(const Features& world)
+#define readTag(feat, s) feat[ ( [](){ static geodesk::Key cs = worldFeats->key(s); return cs; }() ) ]
+
+std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features& ocean, bool compress)
 {
   static std::vector<std::string> poiTags = { "place", "natural", "amenity", "leisure", "tourism", "historic",
       "waterway", "shop", "sport", "landuse", "highway", "building", "railway", "aerialway", "memorial", "cuisine" };
 
-  static const Features* worldFeats;
-  worldFeats = &world;
+  m_tileBox = tileBox(m_id);  //, eps);
+  Features tileFeats = world(m_tileBox);
+  m_tileFeats = &tileFeats;
 
-  SQLiteDB searchDB;
-  if(searchDB.open("fts_wip.sqlite", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) {
-    LOG("Error opening search DB");
-    return -1;
+  Features pois = tileFeats("na[name]");  //"n[place=*]"
+  if(pois.begin() == pois.end()) { return {}; }  // skip admin area processing if nothing to index
+
+  struct AdminMPoly { int level; std::string name, name_en; vt_multi_polygon mpoly; };
+  std::vector<AdminMPoly> adminMPolys;
+
+  const char* adminquery = "wra[boundary=administrative,disputed]";
+  for(Feature f : tileFeats(adminquery)) {
+    auto admintag = readTag(f, "admin_level");
+    if(!admintag) { continue; }
+    admin = double(admintag);
+    if(admin < 2 || admin > 8) { continue; }
+    setFeature(f);
+    loadAreaFeature();
+
+    for(const vt_polygon& poly : m_featMPoly) {
+      if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
+
+      std::string name = readTag(f, "name");
+      if(name.empty()) { continue; }
+      std::string name_en = readTag(f, "name:en");
+      std::string names = !name_en.empty() ? name + " " + name_en : name;
+
+      bool coverstile = false;  //poly.size() == 1 && covers(poly.front());
+      adminMPolys.push_back({admin, name, name_en, coverstile ? vt_multi_polygon{} : poly});
+    }
   }
 
-  if(!searchDB.exec(POI_SCHEMA)) { return -1; }
+  std::sort(adminMPolys.begin(), adminMPolys.end(),
+      [](const AdminMPoly& a, const AdminMPoly& b){ return a.level < b.level; });
 
-  if(!searchDB.exec(POI_FTS_SCHEMA)) {
-    LOG("Error creating FTS index");
-    return -1;
-  }
+  std::vector<PoiRow> rows;
+  rows.reserve(8192);  //pois.count());
+  std::string tags, props, admin, adminfts;
 
-  char const* insertPOISQL = "INSERT INTO pois (name,tags,props,lng,lat) VALUES (?,?,?,?,?);";
-  SQLiteStmt insertPOI = searchDB.stmt(insertPOISQL);
-
-  Features pois = world("na[name]");  //"n[place=*]"
-
-  auto t0 = std::chrono::steady_clock::now();
-  std::string props;
-  int64_t nfeats = 0;
-  searchDB.exec("BEGIN;");
   for(Feature f : pois) {
     std::string name = readTag(f, "name");
     if(name.empty()) { continue; }
     std::string name_en = readTag(f, "name:en");
     std::string names = !name_en.empty() ? name + " " + name_en : name;
 
-    std::string tags;  //std::string maintag;
     for(auto& tag : poiTags) {
       auto val = f[tag.key];
       if(val) {
@@ -98,10 +210,23 @@ int buildSearchIndex(const Features& world)
       }
     }
 
+    for(auto& mp : adminMPolys) {
+      for(auto& poly : mp.mpoly) {
+        if(pointInPolygon(poly, f.xy())) {
+          if(!adminfts.empty()) { adminfts += ' '; }
+          adminfts.append(mp.name);
+          if(!admin.empty()) { admin += ', '; }
+          admin.append(!mp.name_en.empty() ? mp.name_en : mp.name);
+          break;
+        }
+      }
+    }
+
     addJson(props, "osm_id", std::to_string(f.id()));
     addJson(props, "osm_type", f.isWay() ? "way" : f.isNode() ? "node" : "relation");
     addJson(props, "name", name);
     addJson(props, "name:en", name_en);
+    addJson(props, "admin", admin);
     //addJson(props, "place", readTag(f, "place"));
     //addJson(props, "population", readTag(f, "population"));
     //addJson(props, "type", maintag);
@@ -111,22 +236,16 @@ int buildSearchIndex(const Features& world)
     double lng = Mercator::lonFromX(coords.x);
     double lat = Mercator::latFromY(coords.y);
 
-    insertPOI.bind(names, tags, props, lng, lat).exec();
-    props.clear();
-
-    ++nfeats;
-    props.clear();
-    if(nfeats%100000 == 0) {
-      searchDB.exec("COMMIT; BEGIN;");
-      LOGT(t0, "Processed %ld features...", nfeats);
-    }
+    rows.emplace_back(names, adminfts, tags, props, lng, lat);
+    tags.clear(); props.clear(); admin.clear(); adminfts.clear();
   }
-  searchDB.exec("COMMIT;");
-  LOGT(t0, "pois table built (%ld features)", nfeats);
 
-  //LOGT(t0, "Exiting...");
-  return 0;
+  m_tileFeats = nullptr;
+
+  return rows;
 }
+
+// searching
 
 static double lngLatDist(LngLat r1, LngLat r2)
 {
@@ -135,7 +254,7 @@ static double lngLatDist(LngLat r1, LngLat r2)
   return 12742 * asin(sqrt(a));  // kilometers
 }
 
-void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv)
+static void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv)
 {
   static std::unordered_map<std::string, int> tagOrder = [](){
     std::unordered_map<std::string, int> res;
@@ -183,109 +302,41 @@ void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv)
   sqlite3_result_double(context, rank/log2(1+dist));
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-FTSBuilder::FTSBuilder(TileID _id) : m_id(_id)
+// note that this is called on a cpp-httplib thread (and that searchDB is thread local!)
+std::string ftsQuery(const std::string& query, const std::string& searchDBPath)
 {
-  double units = Mercator::MAP_WIDTH/MapProjection::EARTH_CIRCUMFERENCE_METERS;
-  m_origin = units*MapProjection::tileSouthWestCorner(m_id);
-  m_scale = 1/(units*MapProjection::metersPerTileAtZoom(m_id.z));
-}
-
-void TileBuilder::setFeature(Feature& feat)
-{
-  m_feat = &feat;
-  m_area = NAN;
-  m_featMPoly.clear();
-  m_featId = feat.id();  // save id for debugging
-}
-
-std::string TileBuilder::build(const Features& world, const Features& ocean, bool compress)
-{
-  m_tileBox = tileBox(m_id);  //, eps);
-  Features tileFeats = world(m_tileBox);
-  m_tileFeats = &tileFeats;
-  int nfeats = 0;
-
-  auto dispatchFeatures = [&](const Features& feats, bool isOcean = false){
-    for(Feature f : feats) {
-      setFeature(f);
-      processFeature();
-      ++nfeats;
+  if(!searchDB.db) {
+    if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
+      LOG("Error opening search DB on http worker thread!");
+      return {};
     }
-  };
+    searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
 
-  struct AdminMPoly { int level; std::string name, name_en; vt_multi_polygon mpoly; };
-  std::vector<AdminMPoly> adminMPolys;
-
-  const char* adminquery = "wra[boundary=administrative,disputed]";
-  for(Feature f : tileFeats(adminquery)) {
-
-
-    auto admintag = readTag(f, "admin_level");
-    if(!admintag) { continue; }
-    admin = double(admintag);
-    if(admin < 2 || admin > 8) { continue; }
-    setFeature(f);
-    loadAreaFeature();
-
-    for(const vt_polygon& poly : m_featMPoly) {
-      if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
-
-      std::string name = readTag(f, "name");
-      if(name.empty()) { continue; }
-      std::string name_en = readTag(f, "name:en");
-      std::string names = !name_en.empty() ? name + " " + name_en : name;
-
-      bool coverstile = poly.size() == 1 && covers(poly.front());
-      adminMPolys.push_back({admin, name, name_en, coverstile ? vt_multi_polygon{} : poly});
+    if(sqlite3_create_function(searchDB.db, "osmSearchRank", 3, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
+      LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
+      return {};
     }
-
-
-  }
-  std::sort(adminMPolys.begin(), adminMPolys.end(),
-      [](const AdminMPoly& a, const AdminMPoly& b){ return a.level < b.level; });
-
-  for(Feature f : pois) {
-    //...
-    for(auto& mp : adminMPolys) {
-      if(pointInPolygon(mp.mpoly, f.xy())) {
-        if(!adminfts.empty()) { adminfts += ' '; }
-        adminfts.append(mp.names);
-
-        if(!admin.empty()) { admin += ', '; }
-        admin.append(!mp.name_en.empty() ? mp.name_en : mp.name);
-
-
-
-      }
-    }
-    //...
   }
 
-  // how to keep track of polygons?
-  // list of name, polygon pairs
+  //auto it = req.params.find("offset");
+  int offset = 0;
 
-  // check if
+  // words containing any special characters need to be quoted, so just quote every word (and make AND
+  //  operation explicit)
+  auto words = splitStr<std::vector>(query, " ", true);
+  std::string searchStr = "\"" + joinStr(words, "\" AND \"") + "\"*";
 
+  std::string json;
+  json.reserve(65536);
+  bool ok = searchDB.searchNoDist
+      .bind(searchStr, offset)
+      .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
+        json.append(json.empty() ? "[ " : ", ");
+        json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
+        json.append(props).append("}");
+      });
 
-  //
-
-
-  m_tileFeats = nullptr;
-
-
-  return mvt;
+  if(!ok) { return {}; }
+  json.append(json.empty() ? "[]" : " ]");
+  return json;
 }

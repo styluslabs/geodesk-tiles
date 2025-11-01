@@ -44,7 +44,7 @@ static LngLat tileCoordToLngLat(const TileID& tileId, dvec2 tileCoord)
   return MapProjection::projectedMetersToLngLat(meters);
 }
 
-static Box tileBox(const TileID& id, double eps = 0.0)
+Box TileBuilder::tileBox(const TileID& id, double eps)
 {
   LngLat minBBox = tileCoordToLngLat(id, {eps, eps});
   LngLat maxBBox = tileCoordToLngLat(id, {1-eps, 1-eps});

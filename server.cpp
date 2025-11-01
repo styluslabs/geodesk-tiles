@@ -15,8 +15,8 @@
 
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
-extern int buildSearchIndex(const Features& world);
-extern void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv);
+extern int buildSearchIndex(const Features& world, const std::string& searchDBPath);
+extern std::string ftsQuery(const std::string& query, const std::string& searchDBPath);
 
 // WAL allows simultaneous reading and writing
 static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
@@ -44,23 +44,6 @@ public:
 };
 
 thread_local TileDB worldDB;
-
-static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
-    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, pois.tags) LIMIT 50 OFFSET ?;";
-//static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
-//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, lng, lat) LIMIT 50 OFFSET ?;";
-//static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
-//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, lng, lat) LIMIT 50 OFFSET ?;";
-
-class SearchDB : public SQLiteDB
-{
-public:
-  SQLiteStmt searchNoDist = {NULL};
-  //SQLiteStmt searchDist = {NULL};
-  //SQLiteStmt searchOnlyDist = {NULL};
-};
-
-thread_local SearchDB searchDB;
 
 // sigwait would be an alternative approach
 static std::function<void()> onSigInt;
@@ -156,18 +139,19 @@ Optional arguments:
   Features oceanGOL(argv[argi+1]);
   LOG("Loaded %s and %s", argv[argi], argv[argi+1]);
 
+  TileBuilder::worldFeats = &worldGOL;
+  sqlite3_config(SQLITE_CONFIG_MULTITHREAD);  // should be OK since our DB object is declared thread_local
+
   if(buildFTS) {
-    return buildSearchIndex(worldGOL);
+    return buildSearchIndex(worldGOL, searchDBPath);
   }
 
-  TileBuilder::worldFeats = &worldGOL;
   // ... separate queues for high zoom and low zoom (slower build)?
   std::mutex buildMutex;
   std::map< TileID, std::shared_future<std::string> > buildQueue;
   ThreadPool buildWorkers(numBuildThreads);
   ThreadPool dbWriter(1);  // ThreadPool(1) is like AsyncWorker
 
-  sqlite3_config(SQLITE_CONFIG_MULTITHREAD);  // should be OK since our DB object is declared thread_local
   // have to serialize DB writes, so use a single worker thread
   auto dbfut = dbWriter.enqueue([&](){
     if(worldDB.open(worldDBPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) != SQLITE_OK) { return false; }
@@ -259,43 +243,15 @@ Bytes out: %lu
   });
 
   svr.Get("/search", [&](const httplib::Request& req, httplib::Response& res) {
-    if(!searchDB.db) {
-      if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
-        LOG("Error opening search DB on http worker thread!");
-        return httplib::StatusCode::ServiceUnavailable_503;
-      }
-      searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
-
-      if(sqlite3_create_function(searchDB.db, "osmSearchRank", 3, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
-        LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
-        return httplib::StatusCode::InternalServerError_500;
-      }
-    }
-
     auto t0req = std::chrono::steady_clock::now();
     auto qit = req.params.find("q");
     if(qit == req.params.end()) { return httplib::StatusCode::BadRequest_400; }
     const std::string& query = qit->second;
     //auto it = req.params.find("offset");
-    int offset = 0;
+    //int offset = 0;
 
-    // words containing any special characters need to be quoted, so just quote every word (and make AND
-    //  operation explicit)
-    auto words = splitStr<std::vector>(query, " ", true);
-    std::string searchStr = "\"" + joinStr(words, "\" AND \"") + "\"*";
-
-    std::string json;
-    json.reserve(65536);
-    bool ok = searchDB.searchNoDist
-        .bind(searchStr, offset)
-        .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
-          json.append(json.empty() ? "[ " : ", ");
-          json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
-          json.append(props).append("}");
-        });
-
-    if(!ok) { return httplib::StatusCode::InternalServerError_500; }
-    json.append(json.empty() ? "[]" : " ]");
+    std::string json = ftsQuery(query, searchDBPath);
+    if(json.empty()) { return httplib::StatusCode::InternalServerError_500; }
     res.set_content(std::move(json), "application/json");
 
     auto t1req = std::chrono::steady_clock::now();
