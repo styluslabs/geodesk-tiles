@@ -2,7 +2,7 @@
 
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
-extern int buildSearchIndex(const Features& world);
+extern int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string& searchDBPath);
 
 int main(int argc, char* argv[])
 {
@@ -17,7 +17,7 @@ int main(int argc, char* argv[])
 
   TileBuilder::worldFeats = &world;
 
-  buildSearchIndex(world);
+  buildSearchIndex(world, TileID(2, 6, 4), "fts_wip.sqlite");
   return 0;
 
   // for(int x = 2616; x <= 2621; ++x) {

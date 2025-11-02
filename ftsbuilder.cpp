@@ -2,12 +2,6 @@
 #include "tilebuilder.h"
 #include "ulib.h"
 
-//#define LOGT(t0, fmt, ...) do { \
-//  auto t1 = std::chrono::steady_clock::now(); \
-//  double dt = std::chrono::duration<double>(t1 - t0).count(); \
-//  fprintf(stderr, "+%.3f s: " fmt "\n", dt, ## __VA_ARGS__); \
-//} while(0);
-
 #define SQLITEPP_LOGE LOG
 #define SQLITEPP_LOGW LOG
 #include "sqlitepp.h"
@@ -55,7 +49,7 @@ struct PoiRow { std::string names, admin, tags, props; double lng, lat; };
 
 class FTSBuilder : public TileBuilder {
 public:
-  FTSBuilder(TileID _id);
+  FTSBuilder(TileID _id) : TileBuilder(_id, {}) {}
   std::vector<PoiRow> index(const Features& world);
 };
 
@@ -75,7 +69,7 @@ static std::vector<PoiRow> indexTile(const Features& world, TileID id)
   }
 }
 
-int buildSearchIndex(const Features& worldGOL, const std::string& searchDBPath)
+int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string& searchDBPath)
 {
   int numThreads = std::max(2U, std::thread::hardware_concurrency()) - 1;
   ThreadPool indexWorkers(numThreads);
@@ -92,7 +86,7 @@ int buildSearchIndex(const Features& worldGOL, const std::string& searchDBPath)
       LOG("Error creating FTS index");
       return false;
     }
-    char const* insertPOISQL = "INSERT INTO pois (name,tags,props,lng,lat) VALUES (?,?,?,?,?);";
+    char const* insertPOISQL = "INSERT INTO pois (name,admin,tags,props,lng,lat) VALUES (?,?,?,?,?,?);";
     searchDB.insertPOI = searchDB.stmt(insertPOISQL);
     return true;
   });
@@ -108,9 +102,9 @@ int buildSearchIndex(const Features& worldGOL, const std::string& searchDBPath)
       double dt = std::chrono::duration<double>(t1 - time0).count();
       LOG("+%.0fs: processing %s", dt, id.toString().c_str());
     }
-    if(id.z < 4 || (id.z < 8 && worldGOL(TileBuilder::tileBox(id)).count() > 65535)) {
+    if(id.z < 4 || (id.z < 10 && worldGOL(TileBuilder::tileBox(id)).count() > 65535)) {
       for(int ii = 0; ii < 4; ++ii)
-        indexWorkers.enqueue(buildFn, id.getChild(ii, 8));
+        indexWorkers.enqueue(buildFn, id.getChild(ii, 10));
       return;
     }
 
@@ -128,18 +122,24 @@ int buildSearchIndex(const Features& worldGOL, const std::string& searchDBPath)
 
   };
   //onSigInt = [&](){ buildWorkers.requestStop(true); };
-  indexWorkers.enqueue(buildFn, TileID(0, 0, 0));
+  indexWorkers.enqueue(buildFn, toptile);
   indexWorkers.waitForIdle();
   dbWriter.waitForIdle();
   return 0;
 }
 
-FTSBuilder::FTSBuilder(TileID _id)
+//template<class T> bool pointInPolygon(const std::vector<std::vector<T>>& poly, T p)
+static bool pointInPolygon(const vt_polygon& poly, vt_point p)
 {
-  m_id = _id;
-  double units = Mercator::MAP_WIDTH/MapProjection::EARTH_CIRCUMFERENCE_METERS;
-  m_origin = units*MapProjection::tileSouthWestCorner(m_id);
-  m_scale = 1/(units*MapProjection::metersPerTileAtZoom(m_id.z));
+  bool in = false;
+  for(auto& ring : poly) {
+    for(size_t i = 0, j = ring.size()-1; i < ring.size(); j = i++) {
+      if(((ring[i].y > p.y) != (ring[j].y > p.y)) &&
+          (p.x < (ring[j].x - ring[i].x) * (p.y - ring[i].y) / (ring[j].y - ring[i].y) + ring[i].x) )
+        in = !in;
+    }
+  }
+  return in;
 }
 
 static void addJson(std::string& json, const std::string& key, const std::string& val)
@@ -153,8 +153,14 @@ static void addJson(std::string& json, const std::string& key, const std::string
 
 std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features& ocean, bool compress)
 {
-  static std::vector<std::string> poiTags = { "place", "natural", "amenity", "leisure", "tourism", "historic",
-      "waterway", "shop", "sport", "landuse", "highway", "building", "railway", "aerialway", "memorial", "cuisine" };
+  static std::vector<geodesk::Key> poiTags = [&](){
+    std::vector<std::string> tags = { "place", "natural", "amenity", "leisure", "tourism", "historic",
+        "waterway", "shop", "sport", "landuse", "highway", "building", "railway", "aerialway", "memorial", "cuisine" };
+    std::vector<geodesk::Key> keys;
+    keys.reserve(tags.size());
+    for(auto& tag : tags) { keys.push_back(worldFeats->key(tag)); }
+    return keys;
+  }();
 
   m_tileBox = tileBox(m_id);  //, eps);
   Features tileFeats = world(m_tileBox);
@@ -163,33 +169,39 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
   Features pois = tileFeats("na[name]");  //"n[place=*]"
   if(pois.begin() == pois.end()) { return {}; }  // skip admin area processing if nothing to index
 
-  struct AdminMPoly { int level; std::string name, name_en; vt_multi_polygon mpoly; };
+  struct AdminMPoly { int level; int64_t id; std::string name, name_en; vt_point min, max; vt_multi_polygon mpoly; };
   std::vector<AdminMPoly> adminMPolys;
 
   const char* adminquery = "wra[boundary=administrative,disputed]";
   for(Feature f : tileFeats(adminquery)) {
-    auto admintag = readTag(f, "admin_level");
-    if(!admintag) { continue; }
-    admin = double(admintag);
-    if(admin < 2 || admin > 8) { continue; }
+    auto leveltag = readTag(f, "admin_level");
+    if(!leveltag) { continue; }
+    int level = double(leveltag);
+    if(level < 2 || level > 8) { continue; }
     setFeature(f);
     loadAreaFeature();
 
-    for(const vt_polygon& poly : m_featMPoly) {
-      if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
-
+    m_featMPoly.erase(std::remove_if(m_featMPoly.begin(), m_featMPoly.end(),
+        [](const vt_polygon& poly) { return poly.front().size() < 4; }), m_featMPoly.end());
+    //vt_multi_polygon res;
+    //res.reserve(m_featMPoly.size());
+    //for(const vt_polygon& poly : m_featMPoly) {
+    //  if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
+    //  bool coverstile = false;  //poly.size() == 1 && covers(poly.front());
+    //  res.push_back(std::move(poly));
+    //}
+    if(!m_featMPoly.empty()) {
       std::string name = readTag(f, "name");
       if(name.empty()) { continue; }
       std::string name_en = readTag(f, "name:en");
-      std::string names = !name_en.empty() ? name + " " + name_en : name;
-
-      bool coverstile = false;  //poly.size() == 1 && covers(poly.front());
-      adminMPolys.push_back({admin, name, name_en, coverstile ? vt_multi_polygon{} : poly});
+      std::string names = (!name_en.empty() && name_en != name) ? name + " " + name_en : name;
+      adminMPolys.push_back({level, f.id(), name, name_en, m_polyMin, m_polyMax, m_featMPoly});
     }
   }
 
+  // sort from higher to lower admin level
   std::sort(adminMPolys.begin(), adminMPolys.end(),
-      [](const AdminMPoly& a, const AdminMPoly& b){ return a.level < b.level; });
+      [](const AdminMPoly& a, const AdminMPoly& b){ return a.level > b.level; });
 
   std::vector<PoiRow> rows;
   rows.reserve(8192);  //pois.count());
@@ -199,23 +211,29 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     std::string name = readTag(f, "name");
     if(name.empty()) { continue; }
     std::string name_en = readTag(f, "name:en");
-    std::string names = !name_en.empty() ? name + " " + name_en : name;
+    std::string names = (!name_en.empty() && name_en != name) ? name + " " + name_en : name;
 
     for(auto& tag : poiTags) {
-      auto val = f[tag.key];
-      if(val) {
+      auto val = f[tag];
+      if(val && val != "yes") {
         //if(maintag.empty()) { maintag = val; }
         if(!tags.empty()) { tags += ' '; }
         tags.append(val);
       }
     }
 
+    auto coords = f.xy();
+    double lng = Mercator::lonFromX(coords.x);
+    double lat = Mercator::latFromY(coords.y);
+    vt_point pt = toTileCoord(coords);
+
     for(auto& mp : adminMPolys) {
+      if(pt.x < mp.min.x || pt.y < mp.min.y || pt.x > mp.max.x || pt.y > mp.max.y) { continue; }
       for(auto& poly : mp.mpoly) {
-        if(pointInPolygon(poly, f.xy())) {
+        if(pointInPolygon(poly, pt)) {
           if(!adminfts.empty()) { adminfts += ' '; }
           adminfts.append(mp.name);
-          if(!admin.empty()) { admin += ', '; }
+          if(!admin.empty()) { admin += ", "; }
           admin.append(!mp.name_en.empty() ? mp.name_en : mp.name);
           break;
         }
@@ -231,10 +249,6 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     //addJson(props, "population", readTag(f, "population"));
     //addJson(props, "type", maintag);
     props.append(" }");
-
-    auto coords = f.xy();
-    double lng = Mercator::lonFromX(coords.x);
-    double lat = Mercator::latFromY(coords.y);
 
     rows.emplace_back(names, adminfts, tags, props, lng, lat);
     tags.clear(); props.clear(); admin.clear(); adminfts.clear();
@@ -262,10 +276,10 @@ static void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value*
         "neighbourhood", "district", "borough", "municipality", "village", "hamlet", "county", "locality", "islet" };
     int ntags = sizeof(tags)/sizeof(tags[0]);
     for(int ii = 0; ii < ntags; ++ii) {
-      res.insert(tags[ii], ntags - ii);
+      res.emplace(tags[ii], ntags - ii);
     }
     return res;
-  };
+  }();
 
   if(argc < 2) {
     sqlite3_result_error(context, "osmSearchRank - Invalid number of arguments (2 or 6 required).", -1);
@@ -277,11 +291,12 @@ static void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value*
   }
   // sqlite FTS5 rank is roughly -1*number_of_words_in_query; ordered from -\inf to 0
   double rank = sqlite3_value_double(argv[0]);
-  const char* tags = sqlite3_value_text(argv[1]);
 
+  // get the first tag
+  const char* tags = (const char*)sqlite3_value_text(argv[1]);
   const char* tagend = tags;
   while(*tagend && *tagend != ' ') { ++tagend; }
-  if(*tagend != tags) {
+  if(tagend != tags) {
     auto it = tagOrder.find(std::string(tags, tagend));
     if(it != tagOrder.end()) {
       rank -= it->second/100;  // adjust rank to break ties

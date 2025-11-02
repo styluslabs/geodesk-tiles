@@ -189,7 +189,7 @@ real linearRingArea(const std::vector<T>& points)
 }
 
 template<class T>
-bool pointInPolygon(const std::vector<T>& poly, T p)
+bool pointInRing(const std::vector<T>& poly, T p)
 {
   bool in = false;
   for(size_t i = 0, j = poly.size()-1; i < poly.size(); j = i++) {
@@ -333,7 +333,7 @@ void TileBuilder::buildCoastline()
       }
       for(vt_polygon& outer : outers) {
         // test if first point of inner is inside outer ring
-        if(pointInPolygon(outer.front(), pin)) {
+        if(pointInRing(outer.front(), pin)) {
           outer.emplace_back(std::move(inner));
           break;
         }

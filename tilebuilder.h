@@ -34,7 +34,7 @@ class TileBuilder
 public:
   static Features* worldFeats;
   static CodedString getCodedString(std::string_view s);
-  static Box tileBox(const TileID& id, double eps = 0.0);
+  static geodesk::Box tileBox(const TileID& id, double eps = 0.0);
 
   geodesk::Box m_tileBox;
   Features* m_tileFeats = nullptr;
@@ -75,7 +75,7 @@ public:
   TileBuilder(TileID _id, const std::vector<std::string>& layers);
   Feature& feature() { return *m_feat; }
   vt_point toTileCoord(Coordinate r);
-  virtual void processFeature() = 0;
+  virtual void processFeature() {}
   std::string build(const Features& world, const Features& ocean, bool compress = true);
   void setFeature(Feature& feat);
 

@@ -15,7 +15,7 @@
 
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
-extern int buildSearchIndex(const Features& world, const std::string& searchDBPath);
+extern int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string& searchDBPath);
 extern std::string ftsQuery(const std::string& query, const std::string& searchDBPath);
 
 // WAL allows simultaneous reading and writing
@@ -143,7 +143,7 @@ Optional arguments:
   sqlite3_config(SQLITE_CONFIG_MULTITHREAD);  // should be OK since our DB object is declared thread_local
 
   if(buildFTS) {
-    return buildSearchIndex(worldGOL, searchDBPath);
+    return buildSearchIndex(worldGOL, TileID(0, 0, 0), searchDBPath);
   }
 
   // ... separate queues for high zoom and low zoom (slower build)?
