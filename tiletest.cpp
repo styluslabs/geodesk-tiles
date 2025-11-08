@@ -17,7 +17,7 @@ int main(int argc, char* argv[])
 
   TileBuilder::worldFeats = &world;
 
-  buildSearchIndex(world, TileID(2, 6, 4), "fts_wip.sqlite");
+  buildSearchIndex(world, TileID(2, 6, 4), "fts.sqlite");
   return 0;
 
   // for(int x = 2616; x <= 2621; ++x) {

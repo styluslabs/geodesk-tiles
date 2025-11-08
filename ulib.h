@@ -122,7 +122,7 @@ Container<std::string, Container_Params... > splitStr(std::string s, const char*
   return elems;
 }
 
-std::string joinStr(const std::vector<std::string>& strs, const char* sep)
+inline std::string joinStr(const std::vector<std::string>& strs, const char* sep)
 {
   if(strs.size() < 2) { return strs.empty() ? std::string() : strs[0]; }
   size_t tot = (strs.size() - 1)*strlen(sep);

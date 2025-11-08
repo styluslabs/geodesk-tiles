@@ -8,10 +8,10 @@
 
 // search index query
 
-static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
-    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, pois.tags) LIMIT 50 OFFSET ?;";
-//static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
-//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, lng, lat) LIMIT 50 OFFSET ?;";
+static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, pois.tags, props FROM pois_fts JOIN pois ON"
+    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, pois.tags) LIMIT ? OFFSET ?;";
+static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, rank, pois.tags, props FROM pois_fts JOIN pois ON"
+    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(rank, pois.tags, lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
 //static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
 //    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, lng, lat) LIMIT 50 OFFSET ?;";
 
@@ -19,7 +19,7 @@ class SearchDB : public SQLiteDB
 {
 public:
   SQLiteStmt searchNoDist = {NULL};
-  //SQLiteStmt searchDist = {NULL};
+  SQLiteStmt searchDist = {NULL};
   //SQLiteStmt searchOnlyDist = {NULL};
   SQLiteStmt insertPOI = {NULL};
 };
@@ -155,12 +155,23 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
 {
   static std::vector<geodesk::Key> poiTags = [&](){
     std::vector<std::string> tags = { "place", "natural", "amenity", "leisure", "tourism", "historic",
-        "waterway", "shop", "sport", "landuse", "highway", "building", "railway", "aerialway", "memorial", "cuisine" };
+        "waterway", "shop", "sport", "landuse", "building", "railway", "aerialway", "memorial",
+        "office", "cuisine" };  //"highway" ... we only want highway=trailhead (and not bus_stop)
     std::vector<geodesk::Key> keys;
     keys.reserve(tags.size());
     for(auto& tag : tags) { keys.push_back(worldFeats->key(tag)); }
     return keys;
   }();
+
+  // features that have none of the above tags but any of these tags will be excluded
+  // public_transport is dominated by bus stops
+  static std::unordered_set<std::string> badTags = {"traffic_sign", "public_transport"};
+  auto hasBadTag = [](const Feature& f){
+    for(auto kv : f.tags()) {
+      if(badTags.find(std::string(kv.key())) != badTags.end()) { return true; }
+    }
+    return false;
+  };
 
   m_tileBox = tileBox(m_id);  //, eps);
   Features tileFeats = world(m_tileBox);
@@ -213,14 +224,17 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     std::string name_en = readTag(f, "name:en");
     std::string names = (!name_en.empty() && name_en != name) ? name + " " + name_en : name;
 
-    for(auto& tag : poiTags) {
-      auto val = f[tag];
+    for(auto& key : poiTags) {
+      auto val = f[key];
       if(val && val != "yes") {
         //if(maintag.empty()) { maintag = val; }
         if(!tags.empty()) { tags += ' '; }
         tags.append(val);
+        addJson(props, std::string(key), val);
       }
     }
+
+    if(tags.empty() && hasBadTag(f)) { continue; }
 
     auto coords = f.xy();
     double lng = Mercator::lonFromX(coords.x);
@@ -302,49 +316,61 @@ static void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value*
       rank -= it->second/100;  // adjust rank to break ties
     }
   }
+  else
+    rank *= 0.5;  // heavily downrank results w/ no tags
 
-  if(argc < 6 || sqlite3_value_type(argv[2]) != SQLITE_FLOAT || sqlite3_value_type(argv[3]) != SQLITE_FLOAT
-      || sqlite3_value_type(argv[4]) != SQLITE_FLOAT || sqlite3_value_type(argv[5]) != SQLITE_FLOAT) {
+  if(argc < 7 || sqlite3_value_type(argv[2]) != SQLITE_FLOAT || sqlite3_value_type(argv[3]) != SQLITE_FLOAT
+      || sqlite3_value_type(argv[4]) != SQLITE_FLOAT || sqlite3_value_type(argv[5]) != SQLITE_FLOAT
+      || sqlite3_value_type(argv[6]) != SQLITE_FLOAT || sqlite3_value_double(argv[6]) <= 0) {
     sqlite3_result_double(context, rank);
     return;
   }
-  double lon0 = sqlite3_value_double(argv[2]);
-  double lat0 = sqlite3_value_double(argv[3]);
-  double lon = sqlite3_value_double(argv[4]);
-  double lat = sqlite3_value_double(argv[5]);
+  double lon = sqlite3_value_double(argv[2]);
+  double lat = sqlite3_value_double(argv[3]);
+  double lon0 = sqlite3_value_double(argv[4]);
+  double lat0 = sqlite3_value_double(argv[5]);
+  double rad0 = sqlite3_value_double(argv[6]);
   double dist = lngLatDist(LngLat(lon0, lat0), LngLat(lon, lat));  // in kilometers
   // obviously will want a more sophisticated ranking calculation in the future
-  sqlite3_result_double(context, rank/log2(1+dist));
+  sqlite3_result_double(context, rank/(1 + log2(std::max(1.0, dist/rad0))));
 }
 
 // note that this is called on a cpp-httplib thread (and that searchDB is thread local!)
-std::string ftsQuery(const std::string& query, const std::string& searchDBPath)
+std::string ftsQuery(const std::string& query,
+    LngLat lngLat00, LngLat lngLat11, int limit, int offset, const std::string& searchDBPath)
 {
   if(!searchDB.db) {
     if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
-      LOG("Error opening search DB on http worker thread!");
+      LOG("Error opening search database %s on http worker thread!", searchDBPath.c_str());
       return {};
     }
-    searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
-
-    if(sqlite3_create_function(searchDB.db, "osmSearchRank", 3, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
+    if(sqlite3_create_function(searchDB.db, "osmSearchRank", -1, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
       LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
       return {};
     }
+    searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
+    searchDB.searchDist = searchDB.stmt(searchDistSQL);
+    //LOG("Loaded FTS database %s", searchDBPath.c_str());
   }
-
-  //auto it = req.params.find("offset");
-  int offset = 0;
 
   // words containing any special characters need to be quoted, so just quote every word (and make AND
   //  operation explicit)
   auto words = splitStr<std::vector>(query, " ", true);
   std::string searchStr = "\"" + joinStr(words, "\" AND \"") + "\"*";
 
+  if(limit < 1 || limit > 50) { limit = 50; }
+  if(offset < 0 || offset > 1000) { offset = 0; }
+
+  // get center and radius for bounds
+  LngLat center((lngLat00.longitude + lngLat11.longitude)/2, (lngLat00.latitude + lngLat11.latitude)/2);
+  double heightkm = lngLatDist(lngLat00, LngLat(lngLat00.longitude, lngLat11.latitude));
+  double widthkm = lngLatDist(lngLat11, LngLat(lngLat00.longitude, lngLat11.latitude));
+  double radius = std::max(heightkm, widthkm);
+
   std::string json;
   json.reserve(65536);
-  bool ok = searchDB.searchNoDist
-      .bind(searchStr, offset)
+  bool ok = searchDB.searchDist
+      .bind(searchStr, center.longitude, center.latitude, radius, limit, offset)
       .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
         json.append(json.empty() ? "[ " : ", ");
         json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
