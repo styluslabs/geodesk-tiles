@@ -255,9 +255,9 @@ Bytes out: %lu
     LngLat lngLat00, lngLat11;
     auto bIt = req.params.find("bounds");
     if(bIt != req.params.end()) {
-      auto parts = splitStr(bIt->second, ",");
-      lngLat00 = LngLat(atof(parts[0]), atof(parts[1]));
-      lngLat11 = LngLat(atof(parts[2]), atof(parts[3]));
+      auto parts = splitStr<std::vector>(bIt->second, ",");
+      lngLat00 = LngLat(atof(parts[0].c_str()), atof(parts[1].c_str()));
+      lngLat11 = LngLat(atof(parts[2].c_str()), atof(parts[3].c_str()));
     }
 
     std::string json = ftsQuery(query, lngLat00, lngLat11, limit, offset, searchDBPath);

@@ -6,6 +6,12 @@
 #define SQLITEPP_LOGW LOG
 #include "sqlitepp.h"
 
+#define LOGT(t0, fmt, ...) do { \
+  auto t1 = std::chrono::steady_clock::now(); \
+  double dt = std::chrono::duration<double>(t1 - t0).count(); \
+  fprintf(stderr, "+%.3f s: " fmt "\n", dt, ## __VA_ARGS__); \
+} while(0);
+
 // search index query
 
 static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, rank, pois.tags, props FROM pois_fts JOIN pois ON"
@@ -27,8 +33,10 @@ public:
 thread_local SearchDB searchDB;
 
 static const char* POI_SCHEMA = R"#(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
-CREATE TABLE pois(name TEXT, admin TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);)#";
+CREATE TABLE pois(name TEXT, admin TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);
+CREATE VIRTUAL TABLE pois_fts USING fts5(name, admin, tags, content='pois');)#";
 
+/*
 static const char* POI_FTS_SCHEMA = R"#(BEGIN;
 CREATE VIRTUAL TABLE pois_fts USING fts5(name, admin, tags, content='pois');
 
@@ -44,6 +52,7 @@ CREATE TRIGGER pois_update AFTER UPDATE ON pois BEGIN
   INSERT INTO pois_fts(rowid, name, admin, tags) VALUES (NEW.rowid, NEW.name, NEW.admin, NEW.tags);
 END;
 COMMIT;)#";
+*/
 
 struct PoiRow { std::string names, admin, tags, props; double lng, lat; };
 
@@ -69,6 +78,20 @@ static std::vector<PoiRow> indexTile(const Features& world, TileID id)
   }
 }
 
+//static std::atomic_int numFeats = 0;
+//static std::atomic_int numMPolyTests = 0;
+//static std::atomic_int numPinPTests = 0;
+//static std::atomic_int numPinPHits = 0;
+
+static bool isHeavyTile(const Features& worldGOL, TileID id, int nfeats = 16384)
+{
+  auto feats = worldGOL(TileBuilder::tileBox(id));
+  for(auto it = feats.begin(); it != feats.end(); ++it) {
+    if(--nfeats <= 0) { return true; }
+  }
+  return false;
+}
+
 int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string& searchDBPath)
 {
   int numThreads = std::max(2U, std::thread::hardware_concurrency()) - 1;
@@ -81,9 +104,9 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
       LOG("Error opening search DB");
       return false;
     }
-    if(!searchDB.exec(POI_SCHEMA)) { return false; }
-    if(!searchDB.exec(POI_FTS_SCHEMA)) {
-      LOG("Error creating FTS index");
+    //if(!searchDB.exec(POI_SCHEMA)) { return false; }
+    if(!searchDB.exec(POI_SCHEMA)) {
+      LOG("Error creating FTS tables");
       return false;
     }
     char const* insertPOISQL = "INSERT INTO pois (name,admin,tags,props,lng,lat) VALUES (?,?,?,?,?,?);";
@@ -95,14 +118,10 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
     return -1;
   }
 
-  auto time0 = std::chrono::steady_clock::now();
+  auto t0 = std::chrono::steady_clock::now();
   std::function<void(TileID)> buildFn = [&](TileID id){
-    if(id.z == 4) {
-      auto t1 = std::chrono::steady_clock::now();
-      double dt = std::chrono::duration<double>(t1 - time0).count();
-      LOG("+%.0fs: processing %s", dt, id.toString().c_str());
-    }
-    if(id.z < 4 || (id.z < 10 && worldGOL(TileBuilder::tileBox(id)).count() > 65535)) {
+    if(id.z == 4) { LOGT(t0, "processing %s", id.toString().c_str()); }
+    if(id.z < 4 || (id.z < 10 && isHeavyTile(worldGOL, id))) {
       for(int ii = 0; ii < 4; ++ii)
         indexWorkers.enqueue(buildFn, id.getChild(ii, 10));
       return;
@@ -124,12 +143,18 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
   //onSigInt = [&](){ buildWorkers.requestStop(true); };
   indexWorkers.enqueue(buildFn, toptile);
   indexWorkers.waitForIdle();
+  LOGT(t0, "Building index...");
+  dbWriter.enqueue([](){
+    searchDB.exec("INSERT INTO pois_fts(pois_fts) VALUES('rebuild');");
+  });
   dbWriter.waitForIdle();
+  //LOGT(t0, "Finished: %d / %d / %d (total/tests/hits)", numMPolyTests.load(), numPinPTests.load(), numPinPHits.load());
+  LOGT(t0, "Finished");
   return 0;
 }
 
 //template<class T> bool pointInPolygon(const std::vector<std::vector<T>>& poly, T p)
-static bool pointInPolygon(const vt_polygon& poly, vt_point p)
+/*__attribute__((noinline))*/ bool pointInPolygon(const vt_polygon& poly, vt_point p)
 {
   bool in = false;
   for(auto& ring : poly) {
@@ -153,13 +178,14 @@ static void addJson(std::string& json, const std::string& key, const std::string
 
 std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features& ocean, bool compress)
 {
+  // strings must have same lifetime as Keys so we can get string from Key
+  static std::vector<std::string> poiTagStrs = { "place", "natural", "amenity", "leisure", "tourism", "historic",
+      "waterway", "shop", "sport", "landuse", "building", "railway", "aerialway", "memorial",
+      "office", "cuisine", "water" };  //"highway" ... we only want highway=trailhead (and not bus_stop)
   static std::vector<geodesk::Key> poiTags = [&](){
-    std::vector<std::string> tags = { "place", "natural", "amenity", "leisure", "tourism", "historic",
-        "waterway", "shop", "sport", "landuse", "building", "railway", "aerialway", "memorial",
-        "office", "cuisine" };  //"highway" ... we only want highway=trailhead (and not bus_stop)
     std::vector<geodesk::Key> keys;
-    keys.reserve(tags.size());
-    for(auto& tag : tags) { keys.push_back(worldFeats->key(tag)); }
+    keys.reserve(poiTagStrs.size());
+    for(auto& tag : poiTagStrs) { keys.push_back(worldFeats->key(tag)); }
     return keys;
   }();
 
@@ -183,6 +209,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
   struct AdminMPoly { int level; int64_t id; std::string name, name_en; vt_point min, max; vt_multi_polygon mpoly; };
   std::vector<AdminMPoly> adminMPolys;
 
+  // admin_level = 3,5,7 are mostly undesired in US, Europe, but China cities are 5, Japan cities 7
   const char* adminquery = "wra[boundary=administrative,disputed]";
   for(Feature f : tileFeats(adminquery)) {
     auto leveltag = readTag(f, "admin_level");
@@ -221,8 +248,16 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
   for(Feature f : pois) {
     std::string name = readTag(f, "name");
     if(name.empty()) { continue; }
-    std::string name_en = readTag(f, "name:en");
-    std::string names = (!name_en.empty() && name_en != name) ? name + " " + name_en : name;
+
+    auto coords = f.xy();
+    vt_point pt = toTileCoord(coords);
+    if(pt.x < 0 || pt.y < 0 || pt.x > 1 || pt.y > 1) { continue; }  // area belongs to another tile
+
+    // if not a "place", give priority to heritage and wikipedia tags
+    if(readTag(f, "place")) {}
+    else if(readTag(f, "heritage")) { tags.append("heritage"); }
+    else if(readTag(f, "wikipedia")) { tags.append("wikipedia"); }
+    //else if(readTag(f, "wikidata")) { tags.append("wikidata"); }
 
     for(auto& key : poiTags) {
       auto val = f[key];
@@ -236,15 +271,14 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
 
     if(tags.empty() && hasBadTag(f)) { continue; }
 
-    auto coords = f.xy();
-    double lng = Mercator::lonFromX(coords.x);
-    double lat = Mercator::latFromY(coords.y);
-    vt_point pt = toTileCoord(coords);
-
+    //++numFeats;
     for(auto& mp : adminMPolys) {
+      //++numMPolyTests;
       if(pt.x < mp.min.x || pt.y < mp.min.y || pt.x > mp.max.x || pt.y > mp.max.y) { continue; }
+      //++numPinPTests;
       for(auto& poly : mp.mpoly) {
         if(pointInPolygon(poly, pt)) {
+          //++numPinPHits;
           if(!adminfts.empty()) { adminfts += ' '; }
           adminfts.append(mp.name);
           if(!admin.empty()) { admin += ", "; }
@@ -253,6 +287,9 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
         }
       }
     }
+
+    std::string name_en = readTag(f, "name:en");
+    std::string names = (!name_en.empty() && name_en != name) ? name + " " + name_en : name;
 
     addJson(props, "osm_id", std::to_string(f.id()));
     addJson(props, "osm_type", f.isWay() ? "way" : f.isNode() ? "node" : "relation");
@@ -263,6 +300,9 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     //addJson(props, "population", readTag(f, "population"));
     //addJson(props, "type", maintag);
     props.append(" }");
+
+    double lng = Mercator::lonFromX(coords.x);
+    double lat = Mercator::latFromY(coords.y);
 
     rows.emplace_back(names, adminfts, tags, props, lng, lat);
     tags.clear(); props.clear(); admin.clear(); adminfts.clear();
@@ -284,16 +324,12 @@ static double lngLatDist(LngLat r1, LngLat r2)
 
 static void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value** argv)
 {
-  static std::unordered_map<std::string, int> tagOrder = [](){
-    std::unordered_map<std::string, int> res;
-    const char* tags[] = { "country", "state", "province", "city", "town", "island", "suburb", "quarter",
-        "neighbourhood", "district", "borough", "municipality", "village", "hamlet", "county", "locality", "islet" };
-    int ntags = sizeof(tags)/sizeof(tags[0]);
-    for(int ii = 0; ii < ntags; ++ii) {
-      res.emplace(tags[ii], ntags - ii);
-    }
-    return res;
-  }();
+  static std::unordered_map<std::string, int> tagOrder = { {"heritage", 64}, {"wikipedia", 63},
+      {"nature_reserve", 62}, {"park", 61},
+      {"country", 90}, {"state", 85}, {"province", 80}, {"city", 75}, {"town", 70}, {"island", 65},
+      {"suburb", 60}, {"quarter", 55}, {"neighbourhood", 50}, {"district", 45}, {"borough", 40},
+      {"municipality", 35}, {"village", 30}, {"hamlet", 25}, {"county", 20}, {"locality", 15}, {"islet", 10},
+      {"vending_machine", -100} };
 
   if(argc < 2) {
     sqlite3_result_error(context, "osmSearchRank - Invalid number of arguments (2 or 6 required).", -1);
@@ -380,4 +416,88 @@ std::string ftsQuery(const std::string& query,
   if(!ok) { return {}; }
   json.append(json.empty() ? "[]" : " ]");
   return json;
+}
+
+
+// categorical search
+
+static const std::unordered_map<std::string, std::vector<std::string>> categories_map = {
+    {"restaurant", {"fast + food", "food + court"}},
+    {"food", {"restaurant"}},
+    {"coffee", {"cafe"}},
+    {"bar", {"pub", "biergarten"}},
+    {"pub", {"bar"}},
+    {"college", {"university"}},
+    {"school", {"college", "university"}},
+    {"gas", {"fuel"}},
+    {"gas station", {"fuel"}},
+    {"movie", {"cinema"}},
+    {"theater", {"cinema"}},
+    {"liquor", {"alcohol"}},
+    {"grocery", {"supermarket", "greengrocer"}},
+    {"groceries", {"supermarket", "greengrocer"}},
+    {"barber", {"hairdresser"}},
+    {"diy", {"doityourself", "hardware"}},
+    {"hardware", {"doityourself"}},
+    {"electronics", {"computer", "hifi"}},
+    {"charity", {"second + hand"}},
+    {"second hand", {"charity"}},
+    {"auto", {"car"}},
+    {"bike", {"", "(bike OR bicycle) NOT (rental OR parking)"}},  // empty first string to indicate replacement
+    {"bicycle", {"", "bicycle NOT (rental OR parking)"}},
+    {"hotel", {"motel", "hostel", "guest + house"}},
+    {"motel", {"hotel", "hostel", "guest + house"}},
+    {"accomodation", {"hotel", "motel", "hostel", "guest + house", "apartment", "chalet"}},
+    {"lodging", {"hotel", "motel", "hostel", "guest + house", "apartment", "chalet"}},
+    {"park", {"", "park NOT parking"}}
+};
+
+static const std::unordered_map<std::string, std::string> replacements_map = {
+    {"bike", "(bike OR bicycle)"},
+    {"restaurant", "(restaurant OR food)"},
+    {"restaurants", "(restaurant OR food)"},
+    {"food", "(restaurant OR food)"}
+};
+
+static const std::vector<std::string> extrawords = {
+    " me", " near", " nearby", " store", " shop"
+};
+
+std::string transformQuery(std::string q)
+{
+  bool replaced = false;
+  std::transform(q.begin(), q.end(), q.begin(), [](char c){ return std::tolower(c); });
+
+  // remove extraneous trailing words
+  for(const auto &ew : extrawords) {
+    if(q.ends_with(ew)) {
+      replaced = true;
+      q = q.substr(0, q.size() - ew.size());
+    }
+  }
+
+  // find in categories_map
+  auto it = categories_map.find(q);
+  if(it == categories_map.end()) {
+    it = categories_map.find(q.substr(0, q.size()-1));
+  }
+
+  if(it != categories_map.end()) {
+    const auto& catVec = it->second;
+    if(catVec.size() > 1 && catVec[0].empty()) { return catVec[1]; }
+    return q + " OR " + joinStr(catVec, " OR ");
+  }
+
+  auto qwords = splitStr<std::vector>(q, " ");
+  for(auto& w : qwords) {
+    auto it2 = replacements_map.find(w);
+    if(it2 != replacements_map.end()) {
+      replaced = true;
+      w = it2->second;
+    }
+    else
+      w = '"' + w + '"';
+  }
+
+  return replaced ? joinStr(qwords, " AND ") : "";
 }
