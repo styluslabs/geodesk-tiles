@@ -6,3 +6,4 @@
 *.pbf
 *.mbtile*
 callgrind.out.*
+*.sqlite*

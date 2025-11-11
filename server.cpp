@@ -224,20 +224,28 @@ Optional arguments:
     clock0 = clock1;
     double dtcache = (stats.nscached.load()*1.E-6)/stats.reqscached.load();
     double dtbuilt = (stats.nsbuilt.load()*1.E-6)/(stats.reqsok.load() - stats.reqscached.load());
+    double dtsearch = (stats.nssearch.load()*1.E-6)/stats.searchok.load();
     // std::format not available in g++12!
     const char* statfmt =
 R"(Uptime: %.0f s
 CPU: %.3f s/%.3f s
-Avg response (cached): %.3f ms
-Avg response (built): %.3f ms
-Reqs: %lu
-Reqs OK: %lu
-Offline tile reqs: %lu
-Tiles built: %lu
-Bytes out: %lu
+
+/v1:
+  Avg response (cached): %.3f ms
+  Avg response (built): %.3f ms
+  Reqs: %lu
+  Reqs OK: %lu
+  Offline tile reqs: %lu
+  Tiles built: %lu
+  Bytes out: %lu
+
+/search:
+  Reqs: %lu
+  Avg response: %.3f ms
 )";
     auto statstr = fstring(statfmt, uptime, cpudt, dt, dtcache, dtbuilt, stats.reqs.load(),
-        stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load());
+        stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load(),
+        stats.searchok.load(), dtsearch);
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
   });
