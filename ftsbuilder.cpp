@@ -14,9 +14,9 @@
 
 // search index query
 
-static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, bm25(pois_fts, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
+static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_fts, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags) LIMIT ? OFFSET ?;";
-static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, bm25(pois_fts, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
+static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_fts, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags, lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
 //static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
 //    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, lng, lat) LIMIT 50 OFFSET ?;";
@@ -234,7 +234,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
       std::string name = readTag(f, "name");
       if(name.empty()) { continue; }
       std::string name_en = readTag(f, "name:en");
-      std::string names = (!name_en.empty() && name_en != name) ? name + " " + name_en : name;
+      std::string names = (!name_en.empty() && name_en != name) ? name_en + " " + name : name;
       adminMPolys.push_back({level, f.id(), name, name_en, m_polyMin, m_polyMax, m_featMPoly});
     }
   }
@@ -255,13 +255,19 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     vt_point pt = toTileCoord(coords);
     if(pt.x < 0 || pt.y < 0 || pt.x > 1 || pt.y > 1) { continue; }  // area belongs to another tile
 
+    auto leveltag = readTag(f, "admin_level");
+    // don't include boundary=admin areas because they duplicate place= nodes
+    if(leveltag) {
+      auto bndry = readTag(f, "boundary");
+      if(bndry && (bndry == "administrative" || bndry == "disputed")) { continue; }
+    }
+    int flevel = leveltag ? double(leveltag) : INT_MAX;
+
     // if not a "place", give priority to heritage and wikipedia tags
     if(readTag(f, "place")) {}
     else if(readTag(f, "heritage")) { tags.append("heritage"); }
     else if(readTag(f, "wikipedia")) { tags.append("wikipedia"); }
     //else if(readTag(f, "wikidata")) { tags.append("wikidata"); }
-    auto leveltag = readTag(f, "admin_level");
-    int flevel = leveltag ? double(leveltag) : INT_MAX;
 
     for(auto& key : poiTags) {
       auto val = f[key];
@@ -285,7 +291,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
         if(pointInPolygon(poly, pt)) {
           //++numPinPHits;
           if(!adminfts.empty()) { adminfts += ' '; }
-          adminfts.append(mp.name);
+          adminfts.append(!mp.name_en.empty() ? mp.name_en : mp.name);
           if(!admin.empty()) { admin += ", "; }
           admin.append(!mp.name_en.empty() ? mp.name_en : mp.name);
           break;
@@ -320,6 +326,170 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
 
 // searching
 
+// scoring fn - cut and paste of bm25 from sqlite fts5_aux.c
+
+// The first time the bm25() function is called for a query, an instance
+// of the following structure is allocated and populated.
+typedef struct Fts5Bm25Data Fts5Bm25Data;
+struct Fts5Bm25Data {
+  int nPhrase;                    /* Number of phrases in query */
+  double avgdl;                   /* Average number of tokens in each row */
+  double *aIDF;                   /* IDF for each phrase */
+  double *aFreq;                  /* Array used to calculate phrase freq. */
+};
+
+// Callback used by fts5Bm25GetData() to count the number of rows in the
+// table matched by each individual phrase within the query.
+static int fts5CountCb(const Fts5ExtensionApi *pApi, Fts5Context *pFts, void *pUserData)
+{
+  sqlite3_int64 *pn = (sqlite3_int64*)pUserData;
+  //UNUSED_PARAM2(pApi, pFts);
+  (*pn)++;
+  return SQLITE_OK;
+}
+
+// Set *ppData to point to the Fts5Bm25Data object for the current query.
+// If the object has not already been allocated, allocate and populate it
+// now.
+static int fts5Bm25GetData(const Fts5ExtensionApi *pApi, Fts5Context *pFts, Fts5Bm25Data **ppData)
+{
+  int rc = SQLITE_OK;             /* Return code */
+  Fts5Bm25Data *p;                /* Object to return */
+
+  p = (Fts5Bm25Data*)pApi->xGetAuxdata(pFts, 0);
+  if( p==0 ){
+    int nPhrase;                  /* Number of phrases in query */
+    sqlite3_int64 nRow = 0;       /* Number of rows in table */
+    sqlite3_int64 nToken = 0;     /* Number of tokens in table */
+    sqlite3_int64 nByte;          /* Bytes of space to allocate */
+    int i;
+
+    /* Allocate the Fts5Bm25Data object */
+    nPhrase = pApi->xPhraseCount(pFts);
+    nByte = sizeof(Fts5Bm25Data) + nPhrase*2*sizeof(double);
+    p = (Fts5Bm25Data*)sqlite3_malloc64(nByte);
+    if( p==0 ){
+      rc = SQLITE_NOMEM;
+    }else{
+      memset(p, 0, (size_t)nByte);
+      p->nPhrase = nPhrase;
+      p->aIDF = (double*)&p[1];
+      p->aFreq = &p->aIDF[nPhrase];
+    }
+
+    /* Calculate the average document length for this FTS5 table */
+    if( rc==SQLITE_OK ) rc = pApi->xRowCount(pFts, &nRow);
+    assert( rc!=SQLITE_OK || nRow>0 );
+    if( rc==SQLITE_OK ) rc = pApi->xColumnTotalSize(pFts, -1, &nToken);
+    if( rc==SQLITE_OK ) p->avgdl = (double)nToken  / (double)nRow;
+
+    /* Calculate an IDF for each phrase in the query */
+    for(i=0; rc==SQLITE_OK && i<nPhrase; i++){
+      sqlite3_int64 nHit = 0;
+      rc = pApi->xQueryPhrase(pFts, i, (void*)&nHit, fts5CountCb);
+      if( rc==SQLITE_OK ){
+        /* Calculate the IDF (Inverse Document Frequency) for phrase i.
+        ** This is done using the standard BM25 formula as found on wikipedia:
+        **
+        **   IDF = log( (N - nHit + 0.5) / (nHit + 0.5) )
+        **
+        ** where "N" is the total number of documents in the set and nHit
+        ** is the number that contain at least one instance of the phrase
+        ** under consideration.
+        **
+        ** The problem with this is that if (N < 2*nHit), the IDF is
+        ** negative. Which is undesirable. So the minimum allowable IDF is
+        ** (1e-6) - roughly the same as a term that appears in just over
+        ** half of set of 5,000,000 documents.  */
+        double idf = log( (nRow - nHit + 0.5) / (nHit + 0.5) );
+        if( idf<=0.0 ) idf = 1e-6;
+        p->aIDF[i] = idf;
+      }
+    }
+
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(p);
+    }else{
+      rc = pApi->xSetAuxdata(pFts, p, sqlite3_free);
+    }
+    if( rc!=SQLITE_OK ) p = 0;
+  }
+  *ppData = p;
+  return rc;
+}
+
+static void fts5Bm25Function(
+  const Fts5ExtensionApi *pApi,   /* API offered by current FTS version */
+  Fts5Context *pFts,              /* First arg to pass to pApi functions */
+  sqlite3_context *pCtx,          /* Context for returning result/error */
+  int nVal,                       /* Number of values in apVal[] array */
+  sqlite3_value **apVal           /* Array of trailing arguments */
+){
+  const double k1 = 1.2;          /* Constant "k1" from BM25 formula */
+  const double b = 0.75;          /* Constant "b" from BM25 formula */
+  int rc;                         /* Error code */
+  double score = 0.0;             /* SQL function return value */
+  Fts5Bm25Data *pData;            /* Values allocated/calculated once only */
+  int i;                          /* Iterator variable */
+  int nInst = 0;                  /* Value returned by xInstCount() */
+  double D = 0.0;                 /* Total number of tokens in row */
+  double *aFreq = 0;              /* Array of phrase freq. for current row */
+
+  /* Calculate the phrase frequency (symbol "f(qi,D)" in the documentation)
+  ** for each phrase in the query for the current row. */
+  rc = fts5Bm25GetData(pApi, pFts, &pData);
+  if( rc==SQLITE_OK ){
+    aFreq = pData->aFreq;
+    memset(aFreq, 0, sizeof(double) * pData->nPhrase);
+    rc = pApi->xInstCount(pFts, &nInst);
+  }
+  for(i=0; rc==SQLITE_OK && i<nInst; i++){
+    int ip; int ic; int io;
+    rc = pApi->xInst(pFts, i, &ip, &ic, &io);
+    if( rc==SQLITE_OK && aFreq[ip] == 0 ){
+      double w = (nVal > ic) ? sqlite3_value_double(apVal[ic]) : 1.0;
+      if(ip == 0 && ic == 0 && io == 0) { w *= 2; }  // prefix boost for first phrase
+      aFreq[ip] = w;  //aFreq[ip] += w; -- don't count phrase more than once
+    }
+  }
+
+  // use number of tokens in first column (name), not whole row
+  if( rc==SQLITE_OK ){
+    int nTok;
+    rc = pApi->xColumnSize(pFts, 0, &nTok);  //pApi->xColumnSize(pFts, -1, &nTok);
+    D = (double)nTok;
+  }
+
+  /* Determine and return the BM25 score for the current row. Or, if an
+  ** error has occurred, throw an exception. */
+  if( rc==SQLITE_OK ){
+    for(i=0; i<pData->nPhrase; i++){
+      score += pData->aIDF[i] * (
+          ( aFreq[i] * (k1 + 1.0) ) /
+          ( aFreq[i] + k1 * (1 - b + b * D / pData->avgdl) )
+      );
+    }
+    sqlite3_result_double(pCtx, -1.0 * score);
+  }else{
+    sqlite3_result_error_code(pCtx, rc);
+  }
+}
+
+static fts5_api* mfts5_api_from_db(sqlite3 *db)
+{
+  fts5_api *pRet = 0;
+  sqlite3_stmt *pStmt = 0;
+
+  if( SQLITE_OK==sqlite3_prepare(db, "SELECT fts5(?1)", -1, &pStmt, 0) ){
+    sqlite3_bind_pointer(pStmt, 1, (void*)&pRet, "fts5_api_ptr", NULL);
+    sqlite3_step(pStmt);
+  }
+  sqlite3_finalize(pStmt);
+  return pRet;
+}
+
+// distance and tag score adjustments
+
 static double lngLatDist(LngLat r1, LngLat r2)
 {
   constexpr double p = 3.14159265358979323846/180;
@@ -331,7 +501,7 @@ static double applyDistScore(double rank, LngLat lngLat0, LngLat lngLat1, double
 {
   if(rad <= 0) { return rank; }
   double dist = lngLatDist(lngLat0, lngLat1);  // in kilometers
-  return rank/(1 + log2(std::max(1.0, dist/rad)));
+  return rank + 0.1*log2(1.0 + dist/5000.0);  // assumes rad is no more than 5000km
 }
 
 static double applyTagScore(double rank, const char* tags)
@@ -401,6 +571,12 @@ std::string ftsQuery(const std::string& query,
       LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
       return {};
     }
+    //SQLITE_EXTENSION_INIT2(pApi);
+    fts5_api* api = mfts5_api_from_db(searchDB.db);
+    if(!api || api->xCreateFunction(api, "bm25_once", NULL, fts5Bm25Function, NULL) != SQLITE_OK) {
+      LOG("error adding custom FTS5 ranking function for search DB");
+      return {};
+    }
     searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
     searchDB.searchDist = searchDB.stmt(searchDistSQL);
     //LOG("Loaded FTS database %s", searchDBPath.c_str());
@@ -418,7 +594,8 @@ std::string ftsQuery(const std::string& query,
   LngLat center((lngLat00.longitude + lngLat11.longitude)/2, (lngLat00.latitude + lngLat11.latitude)/2);
   double heightkm = lngLatDist(lngLat00, LngLat(lngLat00.longitude, lngLat11.latitude));
   double widthkm = lngLatDist(lngLat11, LngLat(lngLat00.longitude, lngLat11.latitude));
-  double radius = std::max(heightkm, widthkm);
+  double radius = std::max(heightkm, widthkm)/2;
+  if(radius > 5000) { radius = 0; }  // disable distance ranking at very low zoom
 
   std::string json;
   json.reserve(65536);
@@ -478,6 +655,7 @@ static const std::unordered_map<std::string, std::vector<std::string>> categorie
 };
 
 static const std::unordered_map<std::string, std::string> replacements_map = {
+    {"mt", "(mt OR mount)"},
     {"bike", "(bike OR bicycle)"},
     {"restaurant", "(restaurant OR food)"},
     {"restaurants", "(restaurant OR food)"},
