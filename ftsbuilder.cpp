@@ -673,7 +673,8 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     }
     // words containing any special characters need to be quoted, so just quote every word (and make AND
     //  operation explicit)
-    searchStr = joinStr(qwords, " AND ") + "*";
+    searchStr = joinStr(qwords, " AND ");
+    if(searchStr.back() == '"') { searchStr += "*"; }
   }
 
   // get center and radius for bounds
