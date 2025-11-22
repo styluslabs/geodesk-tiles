@@ -629,6 +629,8 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
   if(limit < 1 || limit > 50) { limit = 50; }
   auto sortIt = params.find("sort");
   std::string sortBy = sortIt == params.end() ? "" : sortIt->second;
+  auto dbgIt = params.find("debug");
+  bool debug = dbgIt != params.end() && dbgIt->second != "false";
 
   LngLat lngLat00, lngLat11;
   auto bIt = params.find("bounds");
@@ -687,7 +689,7 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
       .bind(searchStr, center.longitude, center.latitude, radius, limit, offset)
       .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
         json.append(json.empty() ? "[ " : ", ");
-        if(1) {
+        if(debug) {
           double tagscore = applyTagScore(score, tags);
           double distscore = applyDistScore(tagscore, center, LngLat(lng, lat), radius);
           json.append(fstring(
