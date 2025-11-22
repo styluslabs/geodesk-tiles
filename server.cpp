@@ -16,7 +16,7 @@
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
 
 extern int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string& searchDBPath);
-extern std::string ftsQuery(const std::string& query, LngLat lngLat00, LngLat lngLat11, int limit, int offset, const std::string& searchDBPath);
+extern std::string ftsQuery(const std::multimap<std::string, std::string>& params, const std::string& searchDBPath);
 
 // WAL allows simultaneous reading and writing
 static const char* schemaSQL = R"(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
@@ -252,23 +252,8 @@ CPU: %.3f s/%.3f s
 
   svr.Get("/search", [&](const httplib::Request& req, httplib::Response& res) {
     auto t0req = std::chrono::steady_clock::now();
-    auto qit = req.params.find("q");
-    if(qit == req.params.end()) { return httplib::StatusCode::BadRequest_400; }
-    const std::string& query = qit->second;
-    auto oit = req.params.find("offset");
-    int offset = oit == req.params.end() ? 0 : atoi(oit->second.c_str());
-    auto lit = req.params.find("limit");
-    int limit = lit == req.params.end() ? 0 : atoi(lit->second.c_str());
 
-    LngLat lngLat00, lngLat11;
-    auto bIt = req.params.find("bounds");
-    if(bIt != req.params.end()) {
-      auto parts = splitStr<std::vector>(bIt->second, ",");
-      lngLat00 = LngLat(atof(parts[0].c_str()), atof(parts[1].c_str()));
-      lngLat11 = LngLat(atof(parts[2].c_str()), atof(parts[3].c_str()));
-    }
-
-    std::string json = ftsQuery(query, lngLat00, lngLat11, limit, offset, searchDBPath);
+    std::string json = ftsQuery(req.params, searchDBPath);
     if(json.empty()) { return httplib::StatusCode::InternalServerError_500; }
     res.set_content(std::move(json), "application/json");
 

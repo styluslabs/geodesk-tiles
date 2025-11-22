@@ -18,15 +18,15 @@ static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(poi
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags) LIMIT ? OFFSET ?;";
 static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_fts, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags, lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
-//static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, rank, tags, props FROM pois_fts JOIN pois ON"
-//    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, lng, lat) LIMIT 50 OFFSET ?;";
+static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, -1.0, pois.tags, props FROM pois_fts JOIN pois ON"
+    " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, '', lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
 
 class SearchDB : public SQLiteDB
 {
 public:
   SQLiteStmt searchNoDist = {NULL};
   SQLiteStmt searchDist = {NULL};
-  //SQLiteStmt searchOnlyDist = {NULL};
+  SQLiteStmt searchOnlyDist = {NULL};
   SQLiteStmt insertPOI = {NULL};
 };
 
@@ -328,6 +328,9 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
 
 // scoring fn - cut and paste of bm25 from sqlite fts5_aux.c
 
+// column to use for token count for scoring (-1 for all columns); 0 is name column
+#define TOKEN_COUNT_COL 0
+
 // The first time the bm25() function is called for a query, an instance
 // of the following structure is allocated and populated.
 typedef struct Fts5Bm25Data Fts5Bm25Data;
@@ -380,7 +383,7 @@ static int fts5Bm25GetData(const Fts5ExtensionApi *pApi, Fts5Context *pFts, Fts5
     /* Calculate the average document length for this FTS5 table */
     if( rc==SQLITE_OK ) rc = pApi->xRowCount(pFts, &nRow);
     assert( rc!=SQLITE_OK || nRow>0 );
-    if( rc==SQLITE_OK ) rc = pApi->xColumnTotalSize(pFts, -1, &nToken);
+    if( rc==SQLITE_OK ) rc = pApi->xColumnTotalSize(pFts, TOKEN_COUNT_COL, &nToken);
     if( rc==SQLITE_OK ) p->avgdl = (double)nToken  / (double)nRow;
 
     /* Calculate an IDF for each phrase in the query */
@@ -388,19 +391,6 @@ static int fts5Bm25GetData(const Fts5ExtensionApi *pApi, Fts5Context *pFts, Fts5
       sqlite3_int64 nHit = 0;
       rc = pApi->xQueryPhrase(pFts, i, (void*)&nHit, fts5CountCb);
       if( rc==SQLITE_OK ){
-        /* Calculate the IDF (Inverse Document Frequency) for phrase i.
-        ** This is done using the standard BM25 formula as found on wikipedia:
-        **
-        **   IDF = log( (N - nHit + 0.5) / (nHit + 0.5) )
-        **
-        ** where "N" is the total number of documents in the set and nHit
-        ** is the number that contain at least one instance of the phrase
-        ** under consideration.
-        **
-        ** The problem with this is that if (N < 2*nHit), the IDF is
-        ** negative. Which is undesirable. So the minimum allowable IDF is
-        ** (1e-6) - roughly the same as a term that appears in just over
-        ** half of set of 5,000,000 documents.  */
         double idf = log( (nRow - nHit + 0.5) / (nHit + 0.5) );
         if( idf<=0.0 ) idf = 1e-6;
         p->aIDF[i] = idf;
@@ -456,7 +446,7 @@ static void fts5Bm25Function(
   // use number of tokens in first column (name), not whole row
   if( rc==SQLITE_OK ){
     int nTok;
-    rc = pApi->xColumnSize(pFts, 0, &nTok);  //pApi->xColumnSize(pFts, -1, &nTok);
+    rc = pApi->xColumnSize(pFts, TOKEN_COUNT_COL, &nTok);
     D = (double)nTok;
   }
 
@@ -558,69 +548,6 @@ static void udf_osmSearchRank(sqlite3_context* context, int argc, sqlite3_value*
   sqlite3_result_double(context, rank);
 }
 
-// note that this is called on a cpp-httplib thread (and that searchDB is thread local!)
-std::string ftsQuery(const std::string& query,
-    LngLat lngLat00, LngLat lngLat11, int limit, int offset, const std::string& searchDBPath)
-{
-  if(!searchDB.db) {
-    if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
-      LOG("Error opening search database %s on http worker thread!", searchDBPath.c_str());
-      return {};
-    }
-    if(sqlite3_create_function(searchDB.db, "osmSearchRank", -1, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
-      LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
-      return {};
-    }
-    //SQLITE_EXTENSION_INIT2(pApi);
-    fts5_api* api = mfts5_api_from_db(searchDB.db);
-    if(!api || api->xCreateFunction(api, "bm25_once", NULL, fts5Bm25Function, NULL) != SQLITE_OK) {
-      LOG("error adding custom FTS5 ranking function for search DB");
-      return {};
-    }
-    searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
-    searchDB.searchDist = searchDB.stmt(searchDistSQL);
-    //LOG("Loaded FTS database %s", searchDBPath.c_str());
-  }
-
-  // words containing any special characters need to be quoted, so just quote every word (and make AND
-  //  operation explicit)
-  auto words = splitStr<std::vector>(query, " ", true);
-  std::string searchStr = "\"" + joinStr(words, "\" AND \"") + "\"*";
-
-  if(limit < 1 || limit > 50) { limit = 50; }
-  if(offset < 0 || offset > 1000) { offset = 0; }
-
-  // get center and radius for bounds
-  LngLat center((lngLat00.longitude + lngLat11.longitude)/2, (lngLat00.latitude + lngLat11.latitude)/2);
-  double heightkm = lngLatDist(lngLat00, LngLat(lngLat00.longitude, lngLat11.latitude));
-  double widthkm = lngLatDist(lngLat11, LngLat(lngLat00.longitude, lngLat11.latitude));
-  double radius = std::max(heightkm, widthkm)/2;
-  if(radius > 5000) { radius = 0; }  // disable distance ranking at very low zoom
-
-  std::string json;
-  json.reserve(65536);
-  bool ok = searchDB.searchDist
-      .bind(searchStr, center.longitude, center.latitude, radius, limit, offset)
-      .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
-        json.append(json.empty() ? "[ " : ", ");
-        if(1) {
-          double tagscore = applyTagScore(score, tags);
-          double distscore = applyDistScore(tagscore, center, LngLat(lng, lat), radius);
-          json.append(fstring(
-              R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tag_score": %.6f, "dist_score": %.6f, "tags": "%s", "props": )#",
-              lng, lat, score, tagscore, distscore, tags));
-        }
-        else
-          json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
-        json.append(props).append("}");
-      });
-
-  if(!ok) { return {}; }
-  json.append(json.empty() ? "[]" : " ]");
-  return json;
-}
-
-
 // categorical search
 
 static const std::unordered_map<std::string, std::vector<std::string>> categories_map = {
@@ -636,6 +563,7 @@ static const std::unordered_map<std::string, std::vector<std::string>> categorie
     {"movie", {"cinema"}},
     {"theater", {"cinema"}},
     {"liquor", {"alcohol"}},
+    {"supermarket", {"greengrocer"}},
     {"grocery", {"supermarket", "greengrocer"}},
     {"groceries", {"supermarket", "greengrocer"}},
     {"barber", {"hairdresser"}},
@@ -666,41 +594,112 @@ static const std::vector<std::string> extrawords = {
     " me", " near", " nearby", " store", " shop"
 };
 
-std::string transformQuery(std::string q)
+// note that this is called on a cpp-httplib thread (and that searchDB is thread local!)
+std::string ftsQuery(const std::multimap<std::string, std::string>& params, const std::string& searchDBPath)
 {
-  bool replaced = false;
+  if(!searchDB.db) {
+    if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
+      LOG("Error opening search database %s on http worker thread!", searchDBPath.c_str());
+      return {};
+    }
+    if(sqlite3_create_function(searchDB.db, "osmSearchRank", -1, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
+      LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
+      return {};
+    }
+    //SQLITE_EXTENSION_INIT2(pApi);
+    fts5_api* api = mfts5_api_from_db(searchDB.db);
+    if(!api || api->xCreateFunction(api, "bm25_once", NULL, fts5Bm25Function, NULL) != SQLITE_OK) {
+      LOG("error adding custom FTS5 ranking function for search DB");
+      return {};
+    }
+    searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
+    searchDB.searchDist = searchDB.stmt(searchDistSQL);
+    searchDB.searchOnlyDist = searchDB.stmt(searchOnlyDistSQL);
+    //LOG("Loaded FTS database %s", searchDBPath.c_str());
+  }
+
+  auto qit = params.find("q");
+  std::string q = qit == params.end() ? "" : qit->second;
+  if(q.empty()) { return "[]"; }
+  auto oit = params.find("offset");
+  int offset = oit == params.end() ? 0 : atoi(oit->second.c_str());
+  if(offset < 0 || offset > 1000) { offset = 0; }
+  auto lit = params.find("limit");
+  int limit = lit == params.end() ? 0 : atoi(lit->second.c_str());
+  if(limit < 1 || limit > 50) { limit = 50; }
+  auto sortIt = params.find("sort");
+  std::string sortBy = sortIt == params.end() ? "" : sortIt->second;
+
+  LngLat lngLat00, lngLat11;
+  auto bIt = params.find("bounds");
+  if(bIt != params.end()) {
+    auto parts = splitStr<std::vector>(bIt->second, ",");
+    lngLat00 = LngLat(atof(parts[0].c_str()), atof(parts[1].c_str()));
+    lngLat11 = LngLat(atof(parts[2].c_str()), atof(parts[3].c_str()));
+  }
+
+  // cut and paste from transform_query.js
+  std::string searchStr;
+  bool isCategorical = sortBy == "dist";
+  if(q.front() == '!') { q = q.substr(1); isCategorical = true; }
   std::transform(q.begin(), q.end(), q.begin(), [](char c){ return std::tolower(c); });
 
   // remove extraneous trailing words
   for(const auto &ew : extrawords) {
     if(q.ends_with(ew)) {
-      replaced = true;
       q = q.substr(0, q.size() - ew.size());
     }
   }
 
   // find in categories_map
-  auto it = categories_map.find(q);
-  if(it == categories_map.end()) {
-    it = categories_map.find(q.substr(0, q.size()-1));
+  auto catIt = categories_map.find(q);
+  if(catIt == categories_map.end()) {
+    catIt = categories_map.find(q.substr(0, q.size()-1));
   }
 
-  if(it != categories_map.end()) {
-    const auto& catVec = it->second;
-    if(catVec.size() > 1 && catVec[0].empty()) { return catVec[1]; }
-    return q + " OR " + joinStr(catVec, " OR ");
+  if(catIt != categories_map.end()) {
+    const auto& catVec = catIt->second;
+    if(catVec.size() > 1 && catVec[0].empty()) { searchStr = catVec[1]; }
+    else { searchStr = q + " OR " + joinStr(catVec, " OR "); }
+    isCategorical = true;
   }
-
-  auto qwords = splitStr<std::vector>(q, " ");
-  for(auto& w : qwords) {
-    auto it2 = replacements_map.find(w);
-    if(it2 != replacements_map.end()) {
-      replaced = true;
-      w = it2->second;
+  else {
+    auto qwords = splitStr<std::vector>(q, " ", true);
+    for(auto& w : qwords) {
+      auto it2 = replacements_map.find(w);
+      w = it2 != replacements_map.end() ? it2->second : '"' + w + '"';
     }
-    else
-      w = '"' + w + '"';
+    // words containing any special characters need to be quoted, so just quote every word (and make AND
+    //  operation explicit)
+    searchStr = joinStr(qwords, " AND ") + "*";
   }
 
-  return replaced ? joinStr(qwords, " AND ") : "";
+  // get center and radius for bounds
+  LngLat center((lngLat00.longitude + lngLat11.longitude)/2, (lngLat00.latitude + lngLat11.latitude)/2);
+  double heightkm = lngLatDist(lngLat00, LngLat(lngLat00.longitude, lngLat11.latitude));
+  double widthkm = lngLatDist(lngLat11, LngLat(lngLat00.longitude, lngLat11.latitude));
+  double radius = std::max(heightkm, widthkm)/2;
+  if(radius > 5000) { radius = 0; }  // disable distance ranking at very low zoom
+
+  std::string json;
+  json.reserve(65536);
+  bool ok = (isCategorical ? searchDB.searchOnlyDist : searchDB.searchDist)
+      .bind(searchStr, center.longitude, center.latitude, radius, limit, offset)
+      .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
+        json.append(json.empty() ? "[ " : ", ");
+        if(1) {
+          double tagscore = applyTagScore(score, tags);
+          double distscore = applyDistScore(tagscore, center, LngLat(lng, lat), radius);
+          json.append(fstring(
+              R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tag_score": %.6f, "dist_score": %.6f, "tags": "%s", "props": )#",
+              lng, lat, score, tagscore, distscore, tags));
+        }
+        else
+          json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
+        json.append(props).append("}");
+      });
+
+  if(!ok) { return {}; }
+  json.append(json.empty() ? "[]" : " ]");
+  return json;
 }
