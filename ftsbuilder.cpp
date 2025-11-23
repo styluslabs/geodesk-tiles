@@ -491,14 +491,14 @@ static double applyDistScore(double rank, LngLat lngLat0, LngLat lngLat1, double
 {
   if(rad <= 0) { return rank; }
   double dist = lngLatDist(lngLat0, lngLat1);  // in kilometers
-  return rank + 0.1*log2(1.0 + dist/5000.0);  // assumes rad is no more than 5000km
+  return rank + 0.01*log2(0.001 + dist/20000.0);  // earth circum ~40000km; map 0 to max to -0.1 to 0
 }
 
 static double applyTagScore(double rank, const char* tags)
 {
   static std::unordered_map<std::string, int> tagOrder = { {"heritage", 64}, {"wikipedia", 63},
       {"nature_reserve", 62}, {"park", 61}, {"peak", 61}, {"volcano", 61},
-      {"country", 90}, {"state", 85}, {"province", 80}, {"city", 75}, {"town", 70}, {"island", 65},
+      {"country", 90}, {"state", 85}, {"province", 85}, {"city", 80}, {"town", 70}, {"island", 65},
       {"suburb", 60}, {"quarter", 55}, {"neighbourhood", 50}, {"district", 45}, {"borough", 40},
       {"municipality", 35}, {"village", 30}, {"hamlet", 25}, {"county", 20}, {"locality", 15}, {"islet", 10},
       {"vending_machine", -100} };
