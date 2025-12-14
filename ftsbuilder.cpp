@@ -20,6 +20,12 @@ static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags, lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
 static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, -1.0, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, '', lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
+static const char* searchBoundedSQL = R"#(SELECT p.rowid, p.lng, p.lat, -1.0, p.tags, p.props
+  FROM rtree_index r JOIN pois p ON p.rowid = r.id JOIN pois_fts f ON f.rowid = p.rowid
+  WHERE r.minLng >= ? AND r.maxLng <= ? AND r.minLat >= ? AND r.maxLat <= ? AND pois_fts MATCH ?
+  ORDER BY osmSearchRank(-1.0, '', p.lng, p.lat, ?, ?, ?) LIMIT ? OFFSET ?;)#";
+static const char* countMatchesSQL = "SELECT count(1) FROM pois_fts WHERE pois_fts MATCH ?;";
+
 
 class SearchDB : public SQLiteDB
 {
@@ -27,6 +33,8 @@ public:
   SQLiteStmt searchNoDist = {NULL};
   SQLiteStmt searchDist = {NULL};
   SQLiteStmt searchOnlyDist = {NULL};
+  SQLiteStmt searchBounded = {NULL};
+  SQLiteStmt countMatches = {NULL};
   SQLiteStmt insertPOI = {NULL};
 };
 
@@ -34,7 +42,10 @@ thread_local SearchDB searchDB;
 
 static const char* POI_SCHEMA = R"#(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
 CREATE TABLE pois(name TEXT, admin TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);
-CREATE VIRTUAL TABLE pois_fts USING fts5(name, admin, tags, content='pois');)#";
+CREATE VIRTUAL TABLE pois_fts USING fts5(name, admin, tags, content='pois');
+
+CREATE VIRTUAL TABLE rtree_index USING rtree(id, minLng, maxLng, minLat, maxLat);
+)#";
 
 /*
 static const char* POI_FTS_SCHEMA = R"#(BEGIN;
@@ -114,6 +125,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
   });
   if(!dbfut.get()) { return -1; }
 
+  size_t nfeats = 0;
   auto t0 = std::chrono::steady_clock::now();
   std::function<void(TileID)> buildFn = [&](TileID id){
     if(id.z < 4 || (id.z < 10 && isHeavyTile(worldGOL, id))) {
@@ -127,6 +139,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
 
     std::vector<PoiRow> rows = indexTile(worldGOL, id);
     if(!rows.empty()) {
+      nfeats += rows.size();
       dbWriter.enqueue([&, rows = std::move(rows), id](){
         searchDB.exec("BEGIN;");
         for(auto& r : rows) {
@@ -141,9 +154,12 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
   //onSigInt = [&](){ buildWorkers.requestStop(true); };
   indexWorkers.enqueue(buildFn, toptile);
   indexWorkers.waitForIdle();
-  LOGT(t0, "Building index...");
-  dbWriter.enqueue([](){
+  LOGT(t0, "%zu features processed", nfeats);
+  dbWriter.enqueue([&](){
+    LOGT(t0, "Building FTS index...");
     searchDB.exec("INSERT INTO pois_fts(pois_fts) VALUES('rebuild');");
+    LOGT(t0, "Building rtree index...");
+    searchDB.exec("INSERT INTO rtree_index SELECT rowid, lng, lng, lat, lat FROM pois;");
   });
   dbWriter.waitForIdle();
   //LOGT(t0, "Finished: %d / %d / %d (total/tests/hits)", numMPolyTests.load(), numPinPTests.load(), numPinPHits.load());
@@ -487,6 +503,16 @@ static double lngLatDist(LngLat r1, LngLat r2)
   return 12742 * asin(sqrt(a));  // kilometers
 }
 
+// ChatGPT
+static LngLat lngLatOffset(LngLat r0, double x_km, double y_km)
+{
+  constexpr double R = 6371.0;
+  constexpr double deg = 180.0 / 3.14159265358979323846;
+  double lat = r0.latitude + (y_km / R) * deg;
+  double lng = r0.longitude + (x_km / R / std::cos(r0.latitude / deg)) * deg;
+  return LngLat(lng, lat);
+}
+
 static double applyDistScore(double rank, LngLat lngLat0, LngLat lngLat1, double rad)
 {
   if(rad <= 0) { return rank; }
@@ -615,6 +641,8 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);
     searchDB.searchDist = searchDB.stmt(searchDistSQL);
     searchDB.searchOnlyDist = searchDB.stmt(searchOnlyDistSQL);
+    searchDB.searchBounded = searchDB.stmt(searchBoundedSQL);
+    searchDB.countMatches = searchDB.stmt(countMatchesSQL);
     //LOG("Loaded FTS database %s", searchDBPath.c_str());
   }
 
@@ -623,15 +651,18 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
   if(q.empty()) { return "[]"; }
   auto oit = params.find("offset");
   int offset = oit == params.end() ? 0 : atoi(oit->second.c_str());
-  if(offset < 0 || offset > 1000) { offset = 0; }
   auto lit = params.find("limit");
   int limit = lit == params.end() ? 0 : atoi(lit->second.c_str());
-  if(limit < 1 || limit > 50) { limit = 50; }
   auto sortIt = params.find("sort");
   std::string sortBy = sortIt == params.end() ? "" : sortIt->second;
   auto dbgIt = params.find("debug");
-  bool debug = dbgIt != params.end() && dbgIt->second != "false";
-
+  bool debug = dbgIt != params.end() && (dbgIt->second == "true" || dbgIt->second == "1");
+  auto bndIt = params.find("bounded");
+  bool bounded = bndIt != params.end() && (bndIt->second == "true" || bndIt->second == "1");
+  if(!debug) {
+    if(offset < 0 || offset > 1000) { offset = 0; }
+    if(limit < 1 || limit > 50) { limit = 50; }
+  }
   LngLat lngLat00, lngLat11;
   auto bIt = params.find("bounds");
   if(bIt != params.end()) {
@@ -684,25 +715,48 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
   double radius = std::max(heightkm, widthkm)/2;
   if(radius > 5000) { radius = 0; }  // disable distance ranking at very low zoom
 
-  std::string json;
+  int64_t nhits = 0;  //namehits = 0, taghits = 0;
+  searchDB.countMatches.bind("{name, tags}:" + searchStr).onerow(nhits);
+  // if many hits, we could try to detect categorical search by taghits >> namehits
+  //searchDB.countMatches.bind("name:" + searchStr).onerow(namehits);
+  //searchDB.countMatches.bind("tags:" + searchStr).onerow(taghits);
+
+  bool ok = false;
+  std::string json = fstring(R"({"total": %d, "results": [ )", int(nhits));
   json.reserve(65536);
-  bool ok = (isCategorical ? searchDB.searchOnlyDist : searchDB.searchDist)
-      .bind(searchStr, center.longitude, center.latitude, radius, limit, offset)
-      .exec([&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
-        json.append(json.empty() ? "[ " : ", ");
-        if(debug) {
-          double tagscore = applyTagScore(score, tags);
-          double distscore = applyDistScore(tagscore, center, LngLat(lng, lat), radius);
-          json.append(fstring(
-              R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tag_score": %.6f, "dist_score": %.6f, "tags": "%s", "props": )#",
-              lng, lat, score, tagscore, distscore, tags));
-        }
-        else
-          json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
-        json.append(props).append("}");
-      });
+  auto rowcb = [&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
+    if(debug) {
+      double tagscore = applyTagScore(score, tags);
+      double distscore = applyDistScore(tagscore, center, LngLat(lng, lat), radius);
+      json.append(fstring(
+          R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tag_score": %.6f, "dist_score": %.6f, "tags": "%s", "props": )#",
+          lng, lat, score, tagscore, distscore, tags));
+    }
+    else
+      json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
+    json.append(props).append("},");
+  };
+
+  // if too many hits, use bounded search ... disable automatic bounded search for now
+  double hitratio = 4000.0/nhits;
+  if(bounded) {  // || (!debug && hitratio < 1)) {
+    //double arearatio = heightkm*widthkm/150E6;  // total land surface 150E6 km^2
+    //if(arearatio > hitratio) {
+    //  double r = std::max(1.0, std::sqrt(hitratio*150E6)/2);
+    //  lngLat00 = lngLatOffset(center, -r, -r);
+    //  lngLat11 = lngLatOffset(center, r, r);
+    //}
+    //LOG("%s", sqlite3_expanded_sql(ps.stmt));  ...   sqlite3_free()
+    ok = searchDB.searchBounded.bind(lngLat00.longitude, lngLat11.longitude, lngLat00.latitude, lngLat11.latitude,
+        searchStr, center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
+  }
+  else {
+    ok = (isCategorical ? searchDB.searchOnlyDist : searchDB.searchDist)
+        .bind(searchStr, center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
+  }
 
   if(!ok) { return {}; }
-  json.append(json.empty() ? "[]" : " ]");
+  json.pop_back();
+  json.append(" ] }");
   return json;
 }
