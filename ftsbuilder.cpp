@@ -449,31 +449,28 @@ static void fts5Bm25Function(
     memset(aFreq, 0, sizeof(double) * pData->nPhrase);
     rc = pApi->xInstCount(pFts, &nInst);
   }
-  for(i=0; rc==SQLITE_OK && i<nInst; i++){
-    int ip; int ic; int io;
-    rc = pApi->xInst(pFts, i, &ip, &ic, &io);
-    if( rc==SQLITE_OK && aFreq[ip] == 0 ){
-      double w = (nVal > ic) ? sqlite3_value_double(apVal[ic]) : 1.0;
-      if(ip == 0 && ic == 0 && io == 0) { w *= 2; }  // prefix boost for first phrase
-      aFreq[ip] = w;  //aFreq[ip] += w; -- don't count phrase more than once
-    }
-  }
-
   // use number of tokens in first column (name), not whole row
   if( rc==SQLITE_OK ){
     int nTok;
     rc = pApi->xColumnSize(pFts, TOKEN_COUNT_COL, &nTok);
-    D = (double)nTok;
+    D = nTok > 0 ? 0.1*log10((double)nTok) : 0;  // nTok == 0 should never happen
   }
-
-  /* Determine and return the BM25 score for the current row. Or, if an
-  ** error has occurred, throw an exception. */
+  // weights for each phrase
+  for(i=0; rc==SQLITE_OK && i<nInst; i++){
+    int ip; int ic; int io;
+    rc = pApi->xInst(pFts, i, &ip, &ic, &io);  // phrase, column, offset (within col)
+    if( rc==SQLITE_OK ){
+      double w = (nVal > ic) ? sqlite3_value_double(apVal[ic]) : 1.0;
+      if(ip == 0 && ic == 0 && io == 0) { w *= 2; }  // prefix boost for first phrase
+      // adjustment for name length - scaled to contribute O(0.1) to final score so tag adjustment dominates
+      if(ic == 0) { w -= D/pData->aIDF[ip]; }
+      if(aFreq[ip] < w) { aFreq[ip] = w; }  //aFreq[ip] += w; -- don't count phrase more than once
+    }
+  }
   if( rc==SQLITE_OK ){
     for(i=0; i<pData->nPhrase; i++){
-      score += pData->aIDF[i] * (
-          ( aFreq[i] * (k1 + 1.0) ) /
-          ( aFreq[i] + k1 * (1 - b + b * D / pData->avgdl) )
-      );
+      score += pData->aIDF[i] * aFreq[i];  // simple TF-IDF
+      //pData->aIDF[i]*(aFreq[i]*(k1 + 1.0))/(aFreq[i] + k1*(1 - b + b*D/pData->avgdl));
     }
     sqlite3_result_double(pCtx, -1.0 * score);
   }else{
@@ -528,6 +525,7 @@ static double applyTagScore(double rank, const char* tags)
       {"suburb", 60}, {"quarter", 55}, {"neighbourhood", 50}, {"district", 45}, {"borough", 40},
       {"municipality", 35}, {"village", 30}, {"hamlet", 25}, {"county", 20}, {"locality", 15}, {"islet", 10},
       {"vending_machine", -100} };
+  // things that should be covered by wikipedia boost: university, college, museum
 
   const char* tagend = tags;
   while(*tagend && *tagend != ' ') { ++tagend; }
@@ -716,7 +714,7 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
   if(radius > 5000) { radius = 0; }  // disable distance ranking at very low zoom
 
   int64_t nhits = 0;  //namehits = 0, taghits = 0;
-  searchDB.countMatches.bind("{name, tags}:" + searchStr).onerow(nhits);
+  searchDB.countMatches.bind("{name tags} : " + searchStr).onerow(nhits);
   // if many hits, we could try to detect categorical search by taghits >> namehits
   //searchDB.countMatches.bind("name:" + searchStr).onerow(namehits);
   //searchDB.countMatches.bind("tags:" + searchStr).onerow(taghits);
