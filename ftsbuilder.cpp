@@ -14,9 +14,9 @@
 
 // search index query
 
-static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_fts, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
+static const char* searchNoDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_fts, 1.0, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags) LIMIT ? OFFSET ?;";
-static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_fts, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
+static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_fts, 1.0, 1.0, 0.25, 0.5) AS score, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags, lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
 static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, -1.0, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, '', lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
@@ -41,31 +41,17 @@ public:
 thread_local SearchDB searchDB;
 
 static const char* POI_SCHEMA = R"#(PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
-CREATE TABLE pois(name TEXT, admin TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);
-CREATE VIRTUAL TABLE pois_fts USING fts5(name, admin, tags, content='pois');
+CREATE TABLE pois(name TEXT, name_en TEXT, admin TEXT, tags TEXT, props TEXT, lng REAL, lat REAL);
+CREATE VIRTUAL TABLE pois_fts USING fts5(name, name_en, admin, tags, content='pois');
 
 CREATE VIRTUAL TABLE rtree_index USING rtree(id, minLng, maxLng, minLat, maxLat);
 )#";
 
-/*
-static const char* POI_FTS_SCHEMA = R"#(BEGIN;
-CREATE VIRTUAL TABLE pois_fts USING fts5(name, admin, tags, content='pois');
+//CREATE TRIGGER pois_insert AFTER INSERT ON pois BEGIN
+//  INSERT INTO pois_fts(rowid, name, admin, tags) VALUES (NEW.rowid, NEW.name, NEW.admin, NEW.tags);
+//END;
 
--- triggers to keep the FTS index up-to-date
-CREATE TRIGGER pois_insert AFTER INSERT ON pois BEGIN
-  INSERT INTO pois_fts(rowid, name, admin, tags) VALUES (NEW.rowid, NEW.name, NEW.admin, NEW.tags);
-END;
-CREATE TRIGGER pois_delete AFTER DELETE ON pois BEGIN
-  INSERT INTO pois_fts(pois_fts, rowid, name, admin, tags) VALUES ('delete', OLD.rowid, OLD.name, OLD.admin, OLD.tags);
-END;
-CREATE TRIGGER pois_update AFTER UPDATE ON pois BEGIN
-  INSERT INTO pois_fts(pois_fts, rowid, name, admin, tags) VALUES ('delete', OLD.rowid, OLD.name, OLD.admin, OLD.tags);
-  INSERT INTO pois_fts(rowid, name, admin, tags) VALUES (NEW.rowid, NEW.name, NEW.admin, NEW.tags);
-END;
-COMMIT;)#";
-*/
-
-struct PoiRow { std::string names, admin, tags, props; double lng, lat; };
+struct PoiRow { std::string name, name_en, admin, tags, props; double lng, lat; };
 
 class FTSBuilder : public TileBuilder {
 public:
@@ -119,7 +105,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
       LOG("Error creating FTS tables");
       return false;
     }
-    char const* insertPOISQL = "INSERT INTO pois (name,admin,tags,props,lng,lat) VALUES (?,?,?,?,?,?);";
+    char const* insertPOISQL = "INSERT INTO pois (name,name_en,admin,tags,props,lng,lat) VALUES (?,?,?,?,?,?);";
     searchDB.insertPOI = searchDB.stmt(insertPOISQL);
     return true;
   });
@@ -143,7 +129,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
       dbWriter.enqueue([&, rows = std::move(rows), id](){
         searchDB.exec("BEGIN;");
         for(auto& r : rows) {
-          if(!searchDB.insertPOI.bind(r.names, r.admin, r.tags, r.props, r.lng, r.lat).exec())
+          if(!searchDB.insertPOI.bind(r.name, r.name_en, r.admin, r.tags, r.props, r.lng, r.lat).exec())
             LOG("Error adding row to search DB: %s", searchDB.errMsg());
         }
         searchDB.exec("COMMIT;");
@@ -250,7 +236,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
       std::string name = readTag(f, "name");
       if(name.empty()) { continue; }
       std::string name_en = readTag(f, "name:en");
-      std::string names = (!name_en.empty() && name_en != name) ? name_en + " " + name : name;
+      if(name_en == name) { name_en.clear(); }
       adminMPolys.push_back({level, f.id(), name, name_en, m_polyMin, m_polyMax, m_featMPoly});
     }
   }
@@ -306,9 +292,10 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
       for(auto& poly : mp.mpoly) {
         if(pointInPolygon(poly, pt)) {
           //++numPinPHits;
-          if(!adminfts.empty()) { adminfts += ' '; }
-          adminfts.append(!mp.name_en.empty() ? mp.name_en : mp.name);
-          if(!admin.empty()) { admin += ", "; }
+          if(!adminfts.empty()) { adminfts.push_back(' '); }
+          if(!mp.name_en.empty()) { adminfts.append(mp.name_en).push_back(' '); }
+          adminfts.append(mp.name);
+          if(!admin.empty()) { admin.append(", "); }
           admin.append(!mp.name_en.empty() ? mp.name_en : mp.name);
           break;
         }
@@ -316,7 +303,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     }
 
     std::string name_en = readTag(f, "name:en");
-    std::string names = (!name_en.empty() && name_en != name) ? name + " " + name_en : name;
+    if(name_en == name) { name_en.clear(); }
 
     addJson(props, "osm_id", std::to_string(f.id()));
     addJson(props, "osm_type", f.isWay() ? "way" : f.isNode() ? "node" : "relation");
@@ -331,7 +318,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     double lng = Mercator::lonFromX(coords.x);
     double lat = Mercator::latFromY(coords.y);
 
-    rows.emplace_back(names, adminfts, tags, props, lng, lat);
+    rows.emplace_back(name, name_en, adminfts, tags, props, lng, lat);
     tags.clear(); props.clear(); admin.clear(); adminfts.clear();
   }
 
@@ -343,9 +330,6 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
 // searching
 
 // scoring fn - cut and paste of bm25 from sqlite fts5_aux.c
-
-// column to use for token count for scoring (-1 for all columns); 0 is name column
-#define TOKEN_COUNT_COL 0
 
 // The first time the bm25() function is called for a query, an instance
 // of the following structure is allocated and populated.
@@ -379,7 +363,7 @@ static int fts5Bm25GetData(const Fts5ExtensionApi *pApi, Fts5Context *pFts, Fts5
   if( p==0 ){
     int nPhrase;                  /* Number of phrases in query */
     sqlite3_int64 nRow = 0;       /* Number of rows in table */
-    sqlite3_int64 nToken = 0;     /* Number of tokens in table */
+    //sqlite3_int64 nToken = 0;     /* Number of tokens in table */
     sqlite3_int64 nByte;          /* Bytes of space to allocate */
     int i;
 
@@ -399,8 +383,8 @@ static int fts5Bm25GetData(const Fts5ExtensionApi *pApi, Fts5Context *pFts, Fts5
     /* Calculate the average document length for this FTS5 table */
     if( rc==SQLITE_OK ) rc = pApi->xRowCount(pFts, &nRow);
     assert( rc!=SQLITE_OK || nRow>0 );
-    if( rc==SQLITE_OK ) rc = pApi->xColumnTotalSize(pFts, TOKEN_COUNT_COL, &nToken);
-    if( rc==SQLITE_OK ) p->avgdl = (double)nToken  / (double)nRow;
+    //~if( rc==SQLITE_OK ) rc = pApi->xColumnTotalSize(pFts, 0, &nToken);  // total name tokens
+    //~if( rc==SQLITE_OK ) p->avgdl = (double)nToken  / (double)nRow;
 
     /* Calculate an IDF for each phrase in the query */
     for(i=0; rc==SQLITE_OK && i<nPhrase; i++){
@@ -431,14 +415,14 @@ static void fts5Bm25Function(
   int nVal,                       /* Number of values in apVal[] array */
   sqlite3_value **apVal           /* Array of trailing arguments */
 ){
-  const double k1 = 1.2;          /* Constant "k1" from BM25 formula */
-  const double b = 0.75;          /* Constant "b" from BM25 formula */
+  //const double k1 = 1.2;          /* Constant "k1" from BM25 formula */
+  //const double b = 0.75;          /* Constant "b" from BM25 formula */
   int rc;                         /* Error code */
   double score = 0.0;             /* SQL function return value */
   Fts5Bm25Data *pData;            /* Values allocated/calculated once only */
   int i;                          /* Iterator variable */
   int nInst = 0;                  /* Value returned by xInstCount() */
-  double D = 0.0;                 /* Total number of tokens in row */
+  double D[2] = {0, 0};           // adjustment for name token count
   double *aFreq = 0;              /* Array of phrase freq. for current row */
 
   /* Calculate the phrase frequency (symbol "f(qi,D)" in the documentation)
@@ -449,23 +433,24 @@ static void fts5Bm25Function(
     memset(aFreq, 0, sizeof(double) * pData->nPhrase);
     rc = pApi->xInstCount(pFts, &nInst);
   }
-  // use number of tokens in first column (name), not whole row
+  // token counts for name columns
   if( rc==SQLITE_OK ){
     int nTok;
-    rc = pApi->xColumnSize(pFts, TOKEN_COUNT_COL, &nTok);
-    D = nTok > 0 ? 0.1*log10((double)nTok) : 0;  // nTok == 0 should never happen
+    rc = pApi->xColumnSize(pFts, 0, &nTok);
+    D[0] = nTok > 0 ? 0.1*log10((double)nTok) : 0;  // nTok == 0 should never happen
+    rc = pApi->xColumnSize(pFts, 1, &nTok);
+    D[1] = nTok > 0 ? 0.1*log10((double)nTok) : 0;
   }
   // weights for each phrase
   for(i=0; rc==SQLITE_OK && i<nInst; i++){
     int ip; int ic; int io;
     rc = pApi->xInst(pFts, i, &ip, &ic, &io);  // phrase, column, offset (within col)
-    if( rc==SQLITE_OK ){
-      double w = (nVal > ic) ? sqlite3_value_double(apVal[ic]) : 1.0;
-      if(ip == 0 && ic == 0 && io == 0) { w *= 2; }  // prefix boost for first phrase
-      // adjustment for name length - scaled to contribute O(0.1) to final score so tag adjustment dominates
-      if(ic == 0) { w -= D/pData->aIDF[ip]; }
-      if(aFreq[ip] < w) { aFreq[ip] = w; }  //aFreq[ip] += w; -- don't count phrase more than once
-    }
+    if( rc!=SQLITE_OK ){ break; }
+    double w = (nVal > ic) ? sqlite3_value_double(apVal[ic]) : 1.0;
+    if(ip == 0 && ic <= 1 && io == 0) { w *= 2; }  // prefix boost for first phrase for name columns
+    // adjustment for name length - scaled to contribute O(0.1) to final score so tag adjustment dominates
+    if(ic <= 1) { w -= D[ic]/pData->aIDF[ip]; }
+    if(aFreq[ip] < w) { aFreq[ip] = w; }  //aFreq[ip] += w; -- don't count phrase more than once
   }
   if( rc==SQLITE_OK ){
     for(i=0; i<pData->nPhrase; i++){
