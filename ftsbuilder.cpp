@@ -105,7 +105,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
       LOG("Error creating FTS tables");
       return false;
     }
-    char const* insertPOISQL = "INSERT INTO pois (name,name_en,admin,tags,props,lng,lat) VALUES (?,?,?,?,?,?);";
+    char const* insertPOISQL = "INSERT INTO pois (name,name_en,admin,tags,props,lng,lat) VALUES (?,?,?,?,?,?,?);";
     searchDB.insertPOI = searchDB.stmt(insertPOISQL);
     return true;
   });
