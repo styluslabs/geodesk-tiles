@@ -102,7 +102,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
     }
     //if(!searchDB.exec(POI_SCHEMA)) { return false; }
     if(!searchDB.exec(POI_SCHEMA)) {
-      LOG("Error creating FTS tables");
+      LOG("Error creating FTS tables: %s", searchDB.errMsg());
       return false;
     }
     char const* insertPOISQL = "INSERT INTO pois (name,name_en,admin,tags,props,lng,lat) VALUES (?,?,?,?,?,?,?);";
@@ -606,6 +606,11 @@ static const std::vector<std::string> extrawords = {
 // note that this is called on a cpp-httplib thread (and that searchDB is thread local!)
 std::string ftsQuery(const std::multimap<std::string, std::string>& params, const std::string& searchDBPath)
 {
+  static int maxWorldHits = [](){
+    const char* s = getenv("ASCEND_MAX_WORLD_HITS");
+    int n = s ? atoi(s) : 0;
+    return n > 0 ? n : 4000;
+  }();
   if(!searchDB.db) {
     if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
       LOG("Error opening search database %s on http worker thread!", searchDBPath.c_str());
@@ -720,15 +725,15 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     json.append(props).append("},");
   };
 
-  // if too many hits, use bounded search ... disable automatic bounded search for now
-  double hitratio = 4000.0/nhits;
-  if(bounded) {  // || (!debug && hitratio < 1)) {
-    //double arearatio = heightkm*widthkm/150E6;  // total land surface 150E6 km^2
-    //if(arearatio > hitratio) {
-    //  double r = std::max(1.0, std::sqrt(hitratio*150E6)/2);
-    //  lngLat00 = lngLatOffset(center, -r, -r);
-    //  lngLat11 = lngLatOffset(center, r, r);
-    //}
+  // if too many hits, use bounded search
+  double hitratio = double(maxWorldHits)/nhits;
+  if(bounded || (!debug && hitratio < 1)) {
+    double arearatio = heightkm*widthkm/150E6;  // total land surface 150E6 km^2
+    if(arearatio > hitratio) {
+      double r = std::max(1.0, std::sqrt(hitratio*150E6)/2);
+      lngLat00 = lngLatOffset(center, -r, -r);
+      lngLat11 = lngLatOffset(center, r, r);
+    }
     //LOG("%s", sqlite3_expanded_sql(ps.stmt));  ...   sqlite3_free()
     ok = searchDB.searchBounded.bind(lngLat00.longitude, lngLat11.longitude, lngLat00.latitude, lngLat11.latitude,
         searchStr, center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
