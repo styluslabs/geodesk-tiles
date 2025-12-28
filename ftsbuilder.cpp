@@ -596,7 +596,10 @@ static const std::unordered_map<std::string, std::string> replacements_map = {
     {"bike", "(bike OR bicycle)"},
     {"restaurant", "(restaurant OR food)"},
     {"restaurants", "(restaurant OR food)"},
-    {"food", "(restaurant OR food)"}
+    {"food", "(restaurant OR food)"},
+    // US -> UK for common tags
+    {"center", "(center OR centre)"},
+    {"neighborhood", "(neighborhood OR neighbourhood)"}
 };
 
 static const std::vector<std::string> extrawords = {
@@ -606,11 +609,7 @@ static const std::vector<std::string> extrawords = {
 // note that this is called on a cpp-httplib thread (and that searchDB is thread local!)
 std::string ftsQuery(const std::multimap<std::string, std::string>& params, const std::string& searchDBPath)
 {
-  static int maxWorldHits = [](){
-    const char* s = getenv("ASCEND_MAX_WORLD_HITS");
-    int n = s ? atoi(s) : 0;
-    return n > 0 ? n : 4000;
-  }();
+  //static int maxWorldHits = [](){ const char* s = getenv("ASCEND_MAX_WORLD_HITS"); return s ? atoi(s) : 0; }();
   if(!searchDB.db) {
     if(searchDB.open(searchDBPath, SQLITE_OPEN_READONLY) != SQLITE_OK) {
       LOG("Error opening search database %s on http worker thread!", searchDBPath.c_str());
@@ -634,54 +633,56 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     //LOG("Loaded FTS database %s", searchDBPath.c_str());
   }
 
-  auto qit = params.find("q");
-  std::string q = qit == params.end() ? "" : qit->second;
+  static auto isTrue = [](const std::string& s) { return s == "true" || s == "1"; };
+  auto getParam = [&](const char* key){
+    auto it = params.find(key);
+    return it == params.end() ? std::string() : it->second;
+  };
+
+  std::string q = getParam("q");
   if(q.empty()) { return "[]"; }
-  auto oit = params.find("offset");
-  int offset = oit == params.end() ? 0 : atoi(oit->second.c_str());
-  auto lit = params.find("limit");
-  int limit = lit == params.end() ? 0 : atoi(lit->second.c_str());
-  auto sortIt = params.find("sort");
-  std::string sortBy = sortIt == params.end() ? "" : sortIt->second;
-  auto dbgIt = params.find("debug");
-  bool debug = dbgIt != params.end() && (dbgIt->second == "true" || dbgIt->second == "1");
-  auto bndIt = params.find("bounded");
-  bool bounded = bndIt != params.end() && (bndIt->second == "true" || bndIt->second == "1");
+  int offset = atoi(getParam("offset").c_str());
+  int limit = atoi(getParam("limit").c_str());
+  std::string sortBy = getParam("sort");
+  bool debug = isTrue(getParam("debug"));
+  bool bounded = isTrue(getParam("bounded"));
+  bool autocomplete = isTrue(getParam("autocomplete"));
   if(!debug) {
     if(offset < 0 || offset > 1000) { offset = 0; }
     if(limit < 1 || limit > 50) { limit = 50; }
   }
   LngLat lngLat00, lngLat11;
-  auto bIt = params.find("bounds");
-  if(bIt != params.end()) {
-    auto parts = splitStr<std::vector>(bIt->second, ",");
+  auto parts = splitStr<std::vector>(getParam("bounds"), ",");
+  if(parts.size() == 4) {
     lngLat00 = LngLat(atof(parts[0].c_str()), atof(parts[1].c_str()));
     lngLat11 = LngLat(atof(parts[2].c_str()), atof(parts[3].c_str()));
   }
 
   // cut and paste from transform_query.js
   std::string searchStr;
-  bool isCategorical = sortBy == "dist";
+  bool isCategorical = false;
   if(q.front() == '!') { q = q.substr(1); isCategorical = true; }
   std::transform(q.begin(), q.end(), q.begin(), [](char c){ return std::tolower(c); });
 
   // remove extraneous trailing words
+  std::string catq = q;
   for(const auto &ew : extrawords) {
-    if(q.ends_with(ew)) {
-      q = q.substr(0, q.size() - ew.size());
+    if(catq.ends_with(ew)) {
+      catq = catq.substr(0, catq.size() - ew.size());
     }
   }
 
   // find in categories_map
-  auto catIt = categories_map.find(q);
+  auto catIt = categories_map.find(catq);
   if(catIt == categories_map.end()) {
-    catIt = categories_map.find(q.substr(0, q.size()-1));
+    catIt = categories_map.find(catq.substr(0, catq.size()-1));
   }
 
-  if(catIt != categories_map.end()) {
+  if(isCategorical) {}  // use "!" prefix for unmodified categorical search
+  else if(catIt != categories_map.end()) {
     const auto& catVec = catIt->second;
     if(catVec.size() > 1 && catVec[0].empty()) { searchStr = catVec[1]; }
-    else { searchStr = q + " OR " + joinStr(catVec, " OR "); }
+    else { searchStr = catq + " OR " + joinStr(catVec, " OR "); }
     isCategorical = true;
   }
   else {
@@ -694,6 +695,10 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     //  operation explicit)
     searchStr = joinStr(qwords, " AND ");
     if(searchStr.back() == '"') { searchStr += "*"; }
+    // restrict single word autocomplete search to name
+    if(autocomplete && qwords.size() == 1) {
+      searchStr = "{name name_en} : " + searchStr;
+    }
   }
 
   // get center and radius for bounds
@@ -704,47 +709,52 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
   if(radius > 5000) { radius = 0; }  // disable distance ranking at very low zoom
 
   int64_t nhits = 0;  //namehits = 0, taghits = 0;
-  searchDB.countMatches.bind("{name tags} : " + searchStr).onerow(nhits);
+  //searchDB.countMatches.bind("{name name_en tags} : " + searchStr).onerow(nhits);
   // if many hits, we could try to detect categorical search by taghits >> namehits
-  //searchDB.countMatches.bind("name:" + searchStr).onerow(namehits);
+  //searchDB.countMatches.bind("{name name_en}:" + searchStr).onerow(namehits);
   //searchDB.countMatches.bind("tags:" + searchStr).onerow(taghits);
 
   bool ok = false;
-  std::string json = fstring(R"({"total": %d, "results": [ )", int(nhits));
+  std::string json = R"({ "results": [ )";  //fstring(R"({"total": %d, "results": [ )", int(nhits));
   json.reserve(65536);
   auto rowcb = [&](int rowid, double lng, double lat, double score, const char* tags, const char* props){
-    if(debug) {
-      double tagscore = applyTagScore(score, tags);
-      double distscore = applyDistScore(tagscore, center, LngLat(lng, lat), radius);
-      json.append(fstring(
-          R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tag_score": %.6f, "dist_score": %.6f, "tags": "%s", "props": )#",
-          lng, lat, score, tagscore, distscore, tags));
-    }
-    else
+    //if(debug) {
+    //  double tagscore = applyTagScore(score, tags);
+    //  double distscore = applyDistScore(tagscore, center, LngLat(lng, lat), radius);
+    //  json.append(fstring(
+    //      R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tag_score": %.6f, "dist_score": %.6f, "tags": "%s", "props": )#",
+    //      lng, lat, score, tagscore, distscore, tags));
+    //}
+    //else
       json.append(fstring(R"#({"lng": %.7f, "lat": %.7f, "score": %.6f, "tags": "%s", "props": )#", lng, lat, score, tags));
     json.append(props).append("},");
   };
 
-  // if too many hits, use bounded search
-  double hitratio = double(maxWorldHits)/nhits;
-  if(bounded || (!debug && hitratio < 1)) {
-    double arearatio = heightkm*widthkm/150E6;  // total land surface 150E6 km^2
-    if(arearatio > hitratio) {
-      double r = std::max(1.0, std::sqrt(hitratio*150E6)/2);
-      lngLat00 = lngLatOffset(center, -r, -r);
-      lngLat11 = lngLatOffset(center, r, r);
-    }
+  // if too many hits, use bounded search ... this doesn't really help because FTS MATCH still uses full index
+  //double hitratio = double(maxWorldHits)/nhits;
+  if(bounded) { // || (!debug && && hitratio > 0 && hitratio < 1)) {
+    //double arearatio = heightkm*widthkm/150E6;  // total land surface 150E6 km^2
+    //if(arearatio > hitratio) {
+    //  double r = std::max(1.0, std::sqrt(hitratio*150E6)/2);
+    //  lngLat00 = lngLatOffset(center, -r, -r);
+    //  lngLat11 = lngLatOffset(center, r, r);
+    //}
     //LOG("%s", sqlite3_expanded_sql(ps.stmt));  ...   sqlite3_free()
     ok = searchDB.searchBounded.bind(lngLat00.longitude, lngLat11.longitude, lngLat00.latitude, lngLat11.latitude,
         searchStr, center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
   }
   else {
-    ok = (isCategorical ? searchDB.searchOnlyDist : searchDB.searchDist)
+    ok = (isCategorical || sortBy == "dist" ? searchDB.searchOnlyDist : searchDB.searchDist)
         .bind(searchStr, center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
   }
 
   if(!ok) { return {}; }
   json.pop_back();
-  json.append(" ] }");
+  if(debug) {
+    searchDB.countMatches.bind(searchStr).onerow(nhits);
+    json.append(fstring(R"( ], "total": %d })", int(nhits)));
+  }
+  else
+    json.append(" ] }");
   return json;
 }
