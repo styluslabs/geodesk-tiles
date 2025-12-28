@@ -20,10 +20,28 @@ static const char* searchDistSQL = "SELECT pois.rowid, lng, lat, bm25_once(pois_
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(score, pois.tags, lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
 static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, -1.0, pois.tags, props FROM pois_fts JOIN pois ON"
     " pois.ROWID = pois_fts.ROWID WHERE pois_fts MATCH ? ORDER BY osmSearchRank(-1.0, '', lng, lat, ?, ?, ?) LIMIT ? OFFSET ?;";
+
+// r-tree index isn't actually used here, so better to just use p.lng, p.lat
+//static const char* searchBoundedSQL = R"#(SELECT p.rowid, p.lng, p.lat, -1.0, p.tags, p.props
+//  FROM rtree_index r JOIN pois p ON p.rowid = r.id JOIN pois_fts f ON f.rowid = p.rowid
+//  WHERE pois_fts MATCH ? AND r.minLng >= ? AND r.maxLng <= ? AND r.minLat >= ? AND r.maxLat <= ?
+//  ORDER BY osmSearchRank(-1.0, '', p.lng, p.lat, ?, ?, ?) LIMIT ? OFFSET ?;)#";
+
+// this approach does use r-tree index and is 10x faster for 'restaurants' with a small bbox (0.2s vs 2s),
+//  but is slower w/ larger bbox and less common phrases (since it always collects everything in bbox)
+//static const char* searchBoundedSQL = R"#(SELECT p.rowid, p.lng, p.lat, -1.0, p.tags, p.props
+//  FROM (SELECT rowid FROM pois_fts WHERE pois_fts MATCH ?) f
+//  JOIN pois p ON f.rowid = p.rowid
+//  WHERE p.rowid IN (SELECT r.rowid FROM rtree_index r WHERE r.minLng >= ? AND r.maxLng <= ? AND r.minLat >= ? AND r.maxLat <= ?)
+//  ORDER BY osmSearchRank(-1.0, '', p.lng, p.lat, ?, ?, ?) LIMIT ? OFFSET ?;)#";
+// w/ rank: (SELECT rowid, bm25_once(pois_fts, 1.0, 1.0, 0.25, 0.5) AS score FROM pois_fts WHERE pois_fts MATCH ?) f
+// note that ... WHERE p.rowid IN ... is much faster than using f.rowid (uses FTS index differently for some reason)
+
 static const char* searchBoundedSQL = R"#(SELECT p.rowid, p.lng, p.lat, -1.0, p.tags, p.props
-  FROM rtree_index r JOIN pois p ON p.rowid = r.id JOIN pois_fts f ON f.rowid = p.rowid
-  WHERE r.minLng >= ? AND r.maxLng <= ? AND r.minLat >= ? AND r.maxLat <= ? AND pois_fts MATCH ?
+  FROM pois p JOIN pois_fts f ON f.rowid = p.rowid
+  WHERE pois_fts MATCH ? AND p.lng >= ? AND p.lng <= ? AND p.lat >= ? AND p.lat <= ?
   ORDER BY osmSearchRank(-1.0, '', p.lng, p.lat, ?, ?, ?) LIMIT ? OFFSET ?;)#";
+
 static const char* countMatchesSQL = "SELECT count(1) FROM pois_fts WHERE pois_fts MATCH ?;";
 
 
@@ -46,7 +64,7 @@ CREATE VIRTUAL TABLE pois_fts USING fts5(name, name_en, admin, tags, content='po
 
 CREATE VIRTUAL TABLE rtree_index USING rtree(id, minLng, maxLng, minLat, maxLat);
 )#";
-
+//lng UNINDEXED, lat UNINDEXED, -- using this seems to be slower than joining pois and using pois.lng,lat
 //CREATE TRIGGER pois_insert AFTER INSERT ON pois BEGIN
 //  INSERT INTO pois_fts(rowid, name, admin, tags) VALUES (NEW.rowid, NEW.name, NEW.admin, NEW.tags);
 //END;
@@ -740,8 +758,9 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     //  lngLat11 = lngLatOffset(center, r, r);
     //}
     //LOG("%s", sqlite3_expanded_sql(ps.stmt));  ...   sqlite3_free()
-    ok = searchDB.searchBounded.bind(lngLat00.longitude, lngLat11.longitude, lngLat00.latitude, lngLat11.latitude,
-        searchStr, center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
+    ok = searchDB.searchBounded.bind(searchStr,
+        lngLat00.longitude, lngLat11.longitude, lngLat00.latitude, lngLat11.latitude,
+        center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
   }
   else {
     ok = (isCategorical || sortBy == "dist" ? searchDB.searchOnlyDist : searchDB.searchDist)
