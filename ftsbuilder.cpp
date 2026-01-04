@@ -211,6 +211,8 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     for(auto& tag : poiTagStrs) { keys.push_back(worldFeats->key(tag)); }
     return keys;
   }();
+  static std::unordered_set<std::string> anon_amenities = {"drinking_water", "toilets", "atm",
+      "waste_disposal", "water_point", "bicycle_repair_station"};
 
   // features that have none of the above tags but any of these tags will be excluded
   // public_transport is dominated by bus stops
@@ -269,7 +271,11 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
 
   for(Feature f : pois) {
     std::string name = readTag(f, "name");
-    if(name.empty()) { continue; }
+    if(name.empty()) {
+      //static_assert(poiTagStrs[2] == "amenity", "Fix this!");
+      auto amenity = f[poiTags[2]];
+      if(!amenity || anon_amenities.find(std::string(amenity)) == anon_amenities.end()) { continue; }
+    }
 
     auto coords = f.xy();
     vt_point pt = toTileCoord(coords);

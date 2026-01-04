@@ -203,6 +203,8 @@ void AscendTileBuilder::ProcessNode()
     SetEleAttributes();
     Attribute("natural", natural);
     if (prominence > 0) { AttributeNumeric("prominence", prominence); }
+    if (Holds("wikipedia")) { AttributeNumeric("wikipedia", 1); }
+    else if (Holds("wikidata")) { AttributeNumeric("wikidata", 1); }
     return;
   }
   else if (natural == "bay") {
