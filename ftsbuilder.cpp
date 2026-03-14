@@ -37,10 +37,15 @@ static const char* searchOnlyDistSQL = "SELECT pois.rowid, lng, lat, -1.0, pois.
 // w/ rank: (SELECT rowid, bm25_once(pois_fts, 1.0, 1.0, 0.25, 0.5) AS score FROM pois_fts WHERE pois_fts MATCH ?) f
 // note that ... WHERE p.rowid IN ... is much faster than using f.rowid (uses FTS index differently for some reason)
 
-static const char* searchBoundedSQL = R"#(SELECT p.rowid, p.lng, p.lat, -1.0, p.tags, p.props
+static const char* searchBoundedOnlyDistSQL = R"#(SELECT p.rowid, p.lng, p.lat, -1.0, p.tags, p.props
   FROM pois p JOIN pois_fts f ON f.rowid = p.rowid
   WHERE pois_fts MATCH ? AND p.lng >= ? AND p.lng <= ? AND p.lat >= ? AND p.lat <= ?
   ORDER BY osmSearchRank(-1.0, '', p.lng, p.lat, ?, ?, ?) LIMIT ? OFFSET ?;)#";
+
+static const char* searchBoundedSQL = R"#(SELECT p.rowid, p.lng, p.lat, bm25_once(pois_fts, 1.0, 1.0, 0.25, 0.5) AS score,
+  p.tags, p.props FROM pois p JOIN pois_fts f ON f.rowid = p.rowid
+  WHERE pois_fts MATCH ? AND p.lng >= ? AND p.lng <= ? AND p.lat >= ? AND p.lat <= ?
+  ORDER BY osmSearchRank(score, p.tags, p.lng, p.lat, ?, ?, ?) LIMIT ? OFFSET ?;)#";
 
 static const char* countMatchesSQL = "SELECT count(1) FROM pois_fts WHERE pois_fts MATCH ?;";
 
@@ -52,6 +57,7 @@ public:
   SQLiteStmt searchDist = {NULL};
   SQLiteStmt searchOnlyDist = {NULL};
   SQLiteStmt searchBounded = {NULL};
+  SQLiteStmt searchBoundedOnlyDist = {NULL};
   SQLiteStmt countMatches = {NULL};
   SQLiteStmt insertPOI = {NULL};
 };
@@ -653,6 +659,7 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     searchDB.searchDist = searchDB.stmt(searchDistSQL);
     searchDB.searchOnlyDist = searchDB.stmt(searchOnlyDistSQL);
     searchDB.searchBounded = searchDB.stmt(searchBoundedSQL);
+    searchDB.searchBoundedOnlyDist = searchDB.stmt(searchBoundedOnlyDistSQL);
     searchDB.countMatches = searchDB.stmt(countMatchesSQL);
     //LOG("Loaded FTS database %s", searchDBPath.c_str());
   }
@@ -673,7 +680,7 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
   bool autocomplete = isTrue(getParam("autocomplete"));
   if(!debug) {
     if(offset < 0 || offset > 1000) { offset = 0; }
-    if(limit < 1 || limit > 50) { limit = 50; }
+    if(limit < 1 || limit > 100) { limit = 100; }
   }
   LngLat lngLat00, lngLat11;
   auto parts = splitStr<std::vector>(getParam("bounds"), ",");
@@ -764,7 +771,7 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     //  lngLat11 = lngLatOffset(center, r, r);
     //}
     //LOG("%s", sqlite3_expanded_sql(ps.stmt));  ...   sqlite3_free()
-    ok = searchDB.searchBounded.bind(searchStr,
+    ok = (isCategorical || sortBy == "dist" ? searchDB.searchBoundedOnlyDist : searchDB.searchBounded).bind(searchStr,
         lngLat00.longitude, lngLat11.longitude, lngLat00.latitude, lngLat11.latitude,
         center.longitude, center.latitude, radius, limit, offset).exec(rowcb);
   }
