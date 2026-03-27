@@ -293,13 +293,21 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
       auto bndry = readTag(f, "boundary");
       if(bndry && (bndry == "administrative" || bndry == "disputed")) { continue; }
     }
-    int flevel = leveltag ? double(leveltag) : INT_MAX;
 
     // if not a "place", give priority to heritage and wikipedia tags
-    if(readTag(f, "place")) {}
+    auto placetag = readTag(f, "place");
+    if(placetag) {}
     else if(readTag(f, "heritage")) { tags.append("heritage"); }
     else if(readTag(f, "wikipedia")) { tags.append("wikipedia"); }
     //else if(readTag(f, "wikidata")) { tags.append("wikidata"); }
+
+    int flevel = INT_MAX;
+    if(leveltag) { flevel = double(leveltag); }
+    else if(placetag) {
+      if(placetag == "county") { flevel = 6; }
+      else if(placetag == "state" || placetag == "province") { flevel = 4; }
+      else if(placetag == "country") { flevel = 2; }
+    }
 
     for(auto& key : poiTags) {
       auto val = f[key];
