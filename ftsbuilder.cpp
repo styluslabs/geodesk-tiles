@@ -626,7 +626,12 @@ static const std::unordered_map<std::string, std::vector<std::string>> categorie
     {"motel", {"hotel", "hostel", "guest + house"}},
     {"accomodation", {"hotel", "motel", "hostel", "guest + house", "apartment", "chalet"}},
     {"lodging", {"hotel", "motel", "hostel", "guest + house", "apartment", "chalet"}},
-    {"park", {"", "park NOT parking"}}
+    {"park", {"", "park NOT parking"}},
+    {"water", {"", "water"}},
+    {"atm", {"", "atm"}},
+    {"toilet", {"", "toilet"}},
+    {"garbage", {"trash"}},
+    {"waste", {"trash"}}
 };
 
 static const std::unordered_map<std::string, std::string> replacements_map = {

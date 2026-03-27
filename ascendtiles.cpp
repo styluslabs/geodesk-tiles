@@ -441,6 +441,7 @@ void AscendTileBuilder::ProcessWay()
     SetBrunnelAttributes();
     SetNameAttributes(14);
     Attribute("service", service);
+    Attribute("maxspeed", Find("maxspeed"));  // to support distinguishing high speed lines
     return;
   }
 
