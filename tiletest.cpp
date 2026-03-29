@@ -1,8 +1,8 @@
 #include "tilebuilder.h"
 
 extern std::string buildTile(const Features& world, const Features& ocean, TileID id);
-
 extern int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string& searchDBPath);
+extern std::string ftsQuery(const std::multimap<std::string, std::string>& params, const std::string& searchDBPath);
 
 int main(int argc, char* argv[])
 {

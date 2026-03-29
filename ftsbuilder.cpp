@@ -203,6 +203,14 @@ static void addJson(std::string& json, const std::string& key, const std::string
   json += '"';
 }
 
+static Coordinate wayStart(Feature& f)
+{
+  using namespace geodesk;
+  WayCoordinateIterator iter(WayPtr(f.ptr()));
+  return iter.next();
+}
+
+
 #define readTag(feat, s) feat[ ( [](){ static geodesk::Key cs = worldFeats->key(s); return cs; }() ) ]
 
 std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features& ocean, bool compress)
@@ -210,7 +218,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
   // strings must have same lifetime as Keys so we can get string from Key
   static std::vector<std::string> poiTagStrs = { "place", "natural", "amenity", "leisure", "tourism", "historic",
       "waterway", "shop", "sport", "landuse", "building", "railway", "aerialway", "memorial",
-      "office", "cuisine", "water" };  //"highway" ... we only want highway=trailhead (and not bus_stop)
+      "office", "cuisine", "water", "route" };  //"highway" ... we only want highway=trailhead (and not bus_stop)
   static std::vector<geodesk::Key> poiTags = [&](){
     std::vector<geodesk::Key> keys;
     keys.reserve(poiTagStrs.size());
@@ -234,8 +242,8 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
   Features tileFeats = world(m_tileBox);
   m_tileFeats = &tileFeats;
 
-  Features pois = tileFeats("na[name]");  //"n[place=*]"
-  if(pois.begin() == pois.end()) { return {}; }  // skip admin area processing if nothing to index
+//  Features pois = tileFeats("na[name]");  //"n[place=*]"
+//  if(pois.begin() == pois.end()) { return {}; }  // skip admin area processing if nothing to index
 
   struct AdminMPoly { int level; int64_t id; std::string name, name_en; vt_point min, max; vt_multi_polygon mpoly; };
   std::vector<AdminMPoly> adminMPolys;
@@ -275,7 +283,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
   rows.reserve(8192);  //pois.count());
   std::string tags, props, admin, adminfts;
 
-  for(Feature f : pois) {
+  for(Feature f : tileFeats) {
     std::string name = readTag(f, "name");
     if(name.empty()) {
       //static_assert(poiTagStrs[2] == "amenity", "Fix this!");
@@ -283,7 +291,25 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
       if(!amenity || anon_amenities.find(std::string(amenity)) == anon_amenities.end()) { continue; }
     }
 
-    auto coords = f.xy();
+    Coordinate coords;
+    if(f.isNode() || f.isArea()) { coords = f.xy(); }
+    //else if(f.isWay()) {
+    //  if(readTag(f, "highway") != "path" && !readTag(f, "waterway")) { continue; }
+    //  coords = wayStart(f);
+    //}
+    else if(f.isRelation()) {
+      auto type = readTag(f, "type");
+      if(type != "route" && type != "waterway") { continue; }
+      for(Feature child : f.members()) {
+        if(child.isWay()) {
+          coords = wayStart(f);
+          break;
+        }
+      }
+    }
+    else { continue; }
+    if(coords.isNull()) { continue; }
+
     vt_point pt = toTileCoord(coords);
     if(pt.x < 0 || pt.y < 0 || pt.x > 1 || pt.y > 1) { continue; }  // area belongs to another tile
 
@@ -297,6 +323,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
     // if not a "place", give priority to heritage and wikipedia tags
     auto placetag = readTag(f, "place");
     if(placetag) {}
+    else if(f.isRelation() && !f.isArea()) {}  // no boost for routes, waterways
     else if(readTag(f, "heritage")) { tags.append("heritage"); }
     else if(readTag(f, "wikipedia")) { tags.append("wikipedia"); }
     //else if(readTag(f, "wikidata")) { tags.append("wikidata"); }
@@ -629,7 +656,7 @@ static const std::unordered_map<std::string, std::vector<std::string>> categorie
     {"park", {"", "park NOT parking"}},
     {"water", {"", "water"}},
     {"atm", {"", "atm"}},
-    {"toilet", {"", "toilet"}},
+    {"toilet", {"", "toilets"}},
     {"garbage", {"trash"}},
     {"waste", {"trash"}}
 };

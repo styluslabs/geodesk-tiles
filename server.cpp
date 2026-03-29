@@ -32,7 +32,7 @@ BEGIN;
 COMMIT;)";
 
 static const char* getTileSQL =
-    "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?;";
+    "SELECT tile_data FROM tiles WHERE zoom_level = ? AND tile_column = ? AND tile_row = ? AND created_at > ?;";
 static const char* putTileSQL =
     "REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?,?,?,?);";
 
@@ -58,6 +58,14 @@ static void sigint_handler(int s)
     exit(1);
 }
 
+// stochastic approx of median
+static void medUpdate(std::atomic_int_fast64_t& med, int64_t next, int64_t step)
+{
+  auto curr = med.load();
+  med += next > curr ? step : (next < curr ? -step : 0);
+};
+
+
 // Building ocean.gol (used to determine if empty tiles are ocean or land):
 // - download simplified water polygons from https://osmdata.openstreetmap.de/data/water-polygons.html
 //  - note: built with https://github.com/osmcode/osmcoastline
@@ -70,8 +78,9 @@ static void sigint_handler(int s)
 int main(int argc, char* argv[])
 {
   struct Stats_t {
-    std::atomic_uint_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0, ofltiles = 0,
-        reqscached = 0, searchok = 0, nscached = 0, nsbuilt = 0, nssearch = 0;
+    std::atomic_int_fast64_t reqs = 0, reqsok = 0, bytesout = 0, tilesbuilt = 0, ofltiles = 0,
+        reqscached = 0, searchok = 0, nscached = 0, nsbuilt = 0, nssearch = 0,
+        medcached = 5E6, medbuilt = 50E6;
   } stats;
 
   std::signal(SIGINT, sigint_handler);
@@ -146,6 +155,11 @@ Optional arguments:
     return buildSearchIndex(worldGOL, TileID(0, 0, 0), searchDBPath);
   }
 
+  // get timestamp of worldGOL
+  struct stat golStat;
+  int64_t golTimestamp = 0;
+  if(stat(argv[argi], &golStat) == 0) { golTimestamp = golStat.st_mtime; }
+
   // ... separate queues for high zoom and low zoom (slower build)?
   std::mutex buildMutex;
   std::map< TileID, std::shared_future<std::string> > buildQueue;
@@ -164,7 +178,7 @@ Optional arguments:
     return -1;
   }
 
-  auto time0 = std::chrono::steady_clock::now();
+  auto time0 = std::chrono::system_clock::now();
   auto time1 = time0;
   clock_t clock0 = clock();
   if(topTile.isValid()) {
@@ -188,7 +202,7 @@ Optional arguments:
     onSigInt = [&](){ buildWorkers.requestStop(true); };
     buildWorkers.enqueue(buildFn, topTile);
     buildWorkers.waitForIdle();
-    auto t1 = std::chrono::steady_clock::now();
+    auto t1 = std::chrono::system_clock::now();
     double dt = std::chrono::duration<double>(t1 - time0).count();
     LOG("Built %d tiles in %.0fs", int(stats.tilesbuilt.load()), dt);
     return 0;
@@ -215,7 +229,7 @@ Optional arguments:
   }
 
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
-    auto now = std::chrono::steady_clock::now();
+    auto now = std::chrono::system_clock::now();
     double uptime = std::chrono::duration<double>(now - time0).count();
     double dt = std::chrono::duration<double>(now - time1).count();
     time1 = now;
@@ -225,14 +239,16 @@ Optional arguments:
     double dtcache = (stats.nscached.load()*1.E-6)/stats.reqscached.load();
     double dtbuilt = (stats.nsbuilt.load()*1.E-6)/(stats.reqsok.load() - stats.reqscached.load());
     double dtsearch = (stats.nssearch.load()*1.E-6)/stats.searchok.load();
+    double medcached = stats.medcached.load()*1E-6;
+    double medbuilt = stats.medbuilt.load()*1E-6;
     // std::format not available in g++12!
     const char* statfmt =
 R"(Uptime: %.0f s
 CPU: %.3f s/%.3f s
 
 /v1:
-  Avg response (cached): %.3f ms
-  Avg response (built): %.3f ms
+  Avg response (cached): %.3f ms (med. %.3f ms)
+  Avg response (built): %.3f ms (med. %.3f ms)
   Reqs: %lu
   Reqs OK: %lu
   Offline tile reqs: %lu
@@ -243,7 +259,7 @@ CPU: %.3f s/%.3f s
   Reqs: %lu
   Avg response: %.3f ms
 )";
-    auto statstr = fstring(statfmt, uptime, cpudt, dt, dtcache, dtbuilt, stats.reqs.load(),
+    auto statstr = fstring(statfmt, uptime, cpudt, dt, dtcache, medcached, dtbuilt, medbuilt, stats.reqs.load(),
         stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load(),
         stats.searchok.load(), dtsearch);
     res.set_content(statstr, "text/plain");
@@ -251,13 +267,13 @@ CPU: %.3f s/%.3f s
   });
 
   svr.Get("/search", [&](const httplib::Request& req, httplib::Response& res) {
-    auto t0req = std::chrono::steady_clock::now();
+    auto t0req = std::chrono::system_clock::now();
 
     std::string json = ftsQuery(req.params, searchDBPath);
     if(json.empty()) { return httplib::StatusCode::InternalServerError_500; }
     res.set_content(std::move(json), "application/json");
 
-    auto t1req = std::chrono::steady_clock::now();
+    auto t1req = std::chrono::system_clock::now();
     auto dtreq = uint64_t(1E9*std::chrono::duration<double>(t1req - t0req).count());
     stats.nssearch += dtreq;
     ++stats.searchok;
@@ -267,7 +283,7 @@ CPU: %.3f s/%.3f s
 
   svr.Get("/v1/:z/:x/:y", [&](const httplib::Request& req, httplib::Response& res) {
     LOGD("Request %s\n", req.path.c_str());
-    auto t0req = std::chrono::steady_clock::now();
+    auto t0req = std::chrono::system_clock::now();
     ++stats.reqs;
     const char* zstr = req.path_params.at("z").c_str();
     const char* xstr = req.path_params.at("x").c_str();
@@ -294,7 +310,10 @@ CPU: %.3f s/%.3f s
     // X-Rebuild-Tile header to force tile rebuild (w/ valid admin key)
     if(!adminKey.empty() && req.has_header("X-Rebuild-Tile") && req.get_header_value("X-Admin-Key") == adminKey) {}
     else {
-      worldDB.getTile.bind(id.z, id.x, id.yTMS()).exec([&](sqlite3_stmt* stmt){
+      // if tile is older than threshold (and older than GOL file), rebuild
+      auto t6m = (t0req - std::chrono::months(6)).time_since_epoch();
+      int64_t tmin = std::min(golTimestamp, std::chrono::duration_cast<std::chrono::seconds>(t6m).count());
+      worldDB.getTile.bind(id.z, id.x, id.yTMS(), tmin).exec([&](sqlite3_stmt* stmt){
         const char* blob = (const char*) sqlite3_column_blob(stmt, 0);
         const int length = sqlite3_column_bytes(stmt, 0);
         res.set_content(blob, length, "application/vnd.mapbox-vector-tile");
@@ -354,10 +373,10 @@ CPU: %.3f s/%.3f s
     if(req.get_header_value("X-Tile-Priority") == "background") { ++stats.ofltiles; }
 
     // response time stats
-    auto t1req = std::chrono::steady_clock::now();
-    auto dtreq = uint64_t(1E9*std::chrono::duration<double>(t1req - t0req).count());
-    if (iscached) { stats.nscached += dtreq; }
-    else { stats.nsbuilt += dtreq; }
+    auto t1req = std::chrono::system_clock::now();
+    auto dtreq = int64_t(1E9*std::chrono::duration<double>(t1req - t0req).count());
+    if (iscached) { stats.nscached += dtreq;  medUpdate(stats.medcached, dtreq, 1E4); }
+    else { stats.nsbuilt += dtreq;  medUpdate(stats.medbuilt, dtreq, 1E5); }
 
     return httplib::StatusCode::OK_200;
   });
