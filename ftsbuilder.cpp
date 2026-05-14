@@ -732,43 +732,46 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
   // cut and paste from transform_query.js
   std::string searchStr;
   bool isCategorical = false;
-  if(q.front() == '!') { q = q.substr(1); isCategorical = true; }
-  std::transform(q.begin(), q.end(), q.begin(), [](char c){ return std::tolower(c); });
-
-  // remove extraneous trailing words
-  std::string catq = q;
-  for(const auto &ew : extrawords) {
-    if(catq.ends_with(ew)) {
-      catq = catq.substr(0, catq.size() - ew.size());
-    }
-  }
-
-  // find in categories_map
-  auto catIt = categories_map.find(catq);
-  if(catIt == categories_map.end()) {
-    catIt = categories_map.find(catq.substr(0, catq.size()-1));
-  }
-
-  if(isCategorical) {}  // use "!" prefix for unmodified categorical search
-  else if(catIt != categories_map.end()) {
-    const auto& catVec = catIt->second;
-    if(catVec.size() > 1 && catVec[0].empty()) { searchStr = catVec[1]; }
-    else { searchStr = catq + " OR " + joinStr(catVec, " OR "); }
-    isCategorical = true;
+  if(q.front() == '!') { searchStr = q.substr(1); isCategorical = true; }
+  else if(q.front() == '(') {
+    if(q.back() != ')') { return R"({ "results": [] })"; }
+    searchStr = q;
   }
   else {
-    auto qwords = splitStr<std::vector>(q, " ", true);
-    for(auto& w : qwords) {
-      auto it2 = replacements_map.find(w);
-      w = it2 != replacements_map.end() ? it2->second : '"' + w + '"';
+    std::transform(q.begin(), q.end(), q.begin(), [](char c){ return std::tolower(c); });
+    // remove extraneous trailing words
+    std::string catq = q;
+    for(const auto &ew : extrawords) {
+      if(catq.ends_with(ew)) {
+        catq = catq.substr(0, catq.size() - ew.size());
+      }
     }
-    // words containing any special characters need to be quoted, so just quote every word (and make AND
-    //  operation explicit)
-    searchStr = joinStr(qwords, " AND ");
-    if(searchStr.back() == '"') { searchStr += "*"; }
-    // restrict single word autocomplete search to name
-    if(autocomplete && qwords.size() == 1) {
-      searchStr = "{name name_en} : " + searchStr;
+    // find in categories_map
+    auto catIt = categories_map.find(catq);
+    if(catIt == categories_map.end()) {
+      catIt = categories_map.find(catq.substr(0, catq.size()-1));
+    }
+    // category match?
+    if(catIt != categories_map.end()) {
+      const auto& catVec = catIt->second;
+      if(catVec.size() > 1 && catVec[0].empty()) { searchStr = catVec[1]; }
+      else { searchStr = catq + " OR " + joinStr(catVec, " OR "); }
+      isCategorical = true;
+    }
+    else {
+      auto qwords = splitStr<std::vector>(q, " ", true);
+      for(auto& w : qwords) {
+        auto it2 = replacements_map.find(w);
+        w = it2 != replacements_map.end() ? it2->second : '"' + w + '"';
+      }
+      // words containing any special characters need to be quoted, so just quote every word (and make AND
+      //  operation explicit)
+      searchStr = joinStr(qwords, " AND ");
+      if(searchStr.back() == '"') { searchStr += "*"; }
+      // restrict single word autocomplete search to name
+      if(autocomplete && qwords.size() == 1) {
+        searchStr = "{name name_en} : " + searchStr;
+      }
     }
   }
 
