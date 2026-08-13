@@ -7,7 +7,8 @@ set -euo pipefail
 
 if [ ! -d "$HOME/maps" ]; then
   # install dependencies
-  sudo apt install -y git wget make g++ rsync nginx goaccess
+  sudo apt update
+  sudo apt install -y git curl wget unzip make g++ rsync nginx goaccess
   # nftables caddy
 
   # set hostname
@@ -28,8 +29,8 @@ if [ ! -d "$HOME/maps" ]; then
   cd $HOME/maps
   git clone https://github.com/styluslabs/geodesk-tiles.git
 
-  # nginx setup
-  sudo ln -s $HOME/maps/geodesk-tiles/scripts/nginx.conf /etc/nginx/conf.d/tiles-styluslabs-com.conf
+  # does not need to be updated
+  wget -O ocean.gol https://github.com/styluslabs/geodesk-tiles/releases/download/tag-for-assets/ocean.gol
 
   # run server at reboot ... use actual service instead
   #(crontab -l 2>/dev/null; echo "@reboot $RUN_SERVER") | crontab -
@@ -42,7 +43,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=geodesk-tiles/build/Release/server --threads 4 planet.gol ocean.gol
+ExecStart=${HOME}/maps/geodesk-tiles/build/Release/server --threads 4 planet.gol ocean.gol
 WorkingDirectory=${HOME}/maps
 User=${USER}
 Restart=on-failure
@@ -56,8 +57,12 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable geodesk-tiles
 
+  # nginx setup
+  sudo ln -s $HOME/maps/geodesk-tiles/scripts/nginx.conf /etc/nginx/conf.d/tiles-styluslabs-com.conf
+  #sudo systemctl restart nginx  -- nginx will be reloaded by deploy_certs.sh
+
   # tiles-a should be set up last so reloadcmd works normally
-  if [[ "$CURRENT_HOSTNAME" == *"tiles-a.styluslabs.com"* ]]; then
+  if [[ "$TARGET_HOSTNAME" == *"tiles-a.styluslabs.com"* ]]; then
     # TLS setup
     git clone --depth 1 https://github.com/acmesh-official/acme.sh.git
     (cd acme.sh && ./acme.sh --install --accountemail "support@styluslabs.com")
@@ -72,14 +77,13 @@ EOF
 fi
 
 cd $HOME/maps
-(cd geodesk-tiles && git pull && rm -rf build/Release/server && make) &
+(cd geodesk-tiles && git pull && git submodule update --init && rm -rf build/Release/server && make) &
 # axel, aria2, or rclone for faster download?
 #wget -O planet.gob https://download.openplanetdata.com/osm/planet/gob/v1/planet-latest.osm.gob
 #gol load planet
 #rm planet.gob
 wget -O planet.gol https://download.openplanetdata.com/osm/planet/gol/v1/planet-latest.osm.gol &
 wait
-wget -O ocean.gol https://github.com/styluslabs/geodesk-tiles/releases/download/tag-for-assets/ocean.gol
 
 # build search index
 mv fts.sqlite fts.sqlite.old || true
