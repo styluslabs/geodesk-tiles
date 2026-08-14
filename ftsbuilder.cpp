@@ -302,7 +302,7 @@ std::vector<PoiRow> FTSBuilder::index(const Features& world)  //, const Features
       if(type != "route" && type != "waterway") { continue; }
       for(Feature child : f.members()) {
         if(child.isWay()) {
-          coords = wayStart(f);
+          coords = wayStart(child);
           break;
         }
       }
