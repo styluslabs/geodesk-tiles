@@ -10,6 +10,10 @@
 	path = vtzero
 	url = https://github.com/mapbox/vtzero
 	shallow = true
+[submodule "gtl"]
+	path = gtl
+	url = https://github.com/greg7mdp/gtl
+	shallow = true
 [submodule "libgeodesk"]
 	path = libgeodesk
-	url = https://github.com/pbsurf/libgeodesk
+	url = https://github.com/clarisma/libgeodesk

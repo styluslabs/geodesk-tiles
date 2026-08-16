@@ -46,9 +46,8 @@ MODULE_BASE = libgeodesk
 rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
 MODULE_FULL_SOURCES = $(call rwildcard,$(MODULE_BASE)/src,*.cpp)
 #MODULE_FULL_SOURCES = $(wildcard $(MODULE_BASE)/src/*/*.cpp)
-MODULE_INC_PUBLIC = include src
+MODULE_INC_PUBLIC = include src ../gtl/include
 MODULE_DEFS_PRIVATE = GEODESK_MULTITHREADED
-
 MODULE_CXXFLAGS = -Wno-unknown-pragmas -Wno-reorder
 
 include $(ADD_MODULE)

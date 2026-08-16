@@ -11,17 +11,18 @@ int main(int argc, char* argv[])
     return -1;
   }
 
-  auto s = ftsQuery({{"q", "(Alamo OR Pacific)"}}, "fts.sqlite");
-  LOG("%s", s.c_str());
+//  auto s = ftsQuery({{"q", "(Alamo OR Pacific)"}}, "fts.sqlite");
+//  LOG("%s", s.c_str());
 
-//  Features world(argv[1]);
-//  Features ocean(argv[2]);
-//  LOG("Loaded %s and %s", argv[1], argv[2]);
+  Features world(argv[1]);
+  Features ocean(argv[2]);
+  LOG("Loaded %s and %s", argv[1], argv[2]);
 
-//  TileBuilder::worldFeats = &world;
+  TileBuilder::worldFeats = &world;
 
-//  buildSearchIndex(world, TileID(2, 6, 4), "fts.sqlite");
-//  return 0;
+  buildSearchIndex(world, TileID(516, 378, 10), "fts.sqlite");   //TileID(2, 6, 4)
+
+  return 0;
 
   // for(int x = 2616; x <= 2621; ++x) {
   //   for(int y = 6331; y <= 6336; ++y) {
@@ -30,16 +31,17 @@ int main(int argc, char* argv[])
   //   }
   // }
 
-  // {
-  //   TileID id(662, 1587, 12);
-  //   std::string mvt = buildTile(world, ocean, id);
-  //   return 0;
-  // }
+//   {
+//     TileID id(2065, 1512, 12);
+//     std::string mvt = buildTile(world, ocean, id);
+//     return 0;
+//   }
 
 //  {
-//    TileID id(2617, 6332, 14);  // Alamo square!
+//    TileID id(8261, 6050, 14);  // andorra
+//    //TileID id(2617, 6332, 14);  // Alamo square!
 //    //TileID id(686, 1607, 12);
-//    while(id.z > 7) {
+//    while(id.z > 9) {
 //      std::string mvt = buildTile(world, ocean, id);
 //      id = id.getParent();
 //    }

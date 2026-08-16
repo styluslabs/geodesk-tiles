@@ -82,7 +82,7 @@ struct ZMap {
 
   const std::string& tag() const { return m_tag; }
   const CodedString& tagCode() const {
-    if(m_tagCode.isNull())
+    if(!m_tagCode.data())
       m_tagCode = TileBuilder::getCodedString(m_tag);
     return m_tagCode;
   }

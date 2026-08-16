@@ -1,4 +1,5 @@
 #include <geodesk/geodesk.h>
+#include <geodesk/feature/WayCoordinateIterator.h>
 #include "tilebuilder.h"
 #include "ulib.h"
 
