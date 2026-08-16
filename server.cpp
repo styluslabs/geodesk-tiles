@@ -55,7 +55,7 @@ static void sigint_handler(int s)
     onSigInt = {};
   }
   else
-    exit(1);
+    exit(128 + s);
 }
 
 // stochastic approx of median
@@ -84,6 +84,7 @@ int main(int argc, char* argv[])
   } stats;
 
   std::signal(SIGINT, sigint_handler);
+  std::signal(SIGTERM, sigint_handler);
 
   // defaults
   const char* worldDBPath = "planet.mbtiles";
