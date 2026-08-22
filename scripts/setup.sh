@@ -59,6 +59,13 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable geodesk-tiles
 
+  # dummy certs so nginx will start
+  sudo mkdir -p /etc/nginx/ssl
+  sudo openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+    -keyout /etc/nginx/ssl/tiles.styluslabs.com.key.pem \
+    -out /etc/nginx/ssl/tiles.styluslabs.com.cert.pem \
+    -subj "/CN=tiles.styluslabs.com"
+
   # nginx setup
   sudo ln -s $HOME/maps/geodesk-tiles/scripts/nginx.conf /etc/nginx/conf.d/tiles-styluslabs-com.conf
   sudo systemctl restart nginx
@@ -67,6 +74,7 @@ EOF
   if [[ "$TARGET_HOSTNAME" == *"tiles-a.styluslabs.com"* ]]; then
     sudo mkdir -p /var/www/tiles.styluslabs.com
     sudo chown -R $USER:$USER /var/www/tiles.styluslabs.com
+    chmod 755 $HOME/maps/geodesk-tiles/scripts/deploy_certs.sh
     # TLS setup
     git clone --depth 1 https://github.com/acmesh-official/acme.sh.git
     (cd acme.sh && ./acme.sh --install --accountemail "support@styluslabs.com")
@@ -74,8 +82,8 @@ EOF
     # -w folder should be served at /.well-known/acme-challenge/
     $HOME/.acme.sh/acme.sh --issue -d tiles.styluslabs.com -w /var/www/tiles.styluslabs.com
     $HOME/.acme.sh/acme.sh --install-cert -d tiles.styluslabs.com \
-        --key-file $HOME/maps/key.pem  \
-        --fullchain-file $HOME/maps/cert.pem \
+        --key-file $HOME/maps/tiles.styluslabs.com.key.pem  \
+        --fullchain-file $HOME/maps/tiles.styluslabs.com.cert.pem \
         --reloadcmd "$HOME/maps/geodesk-tiles/scripts/deploy_certs.sh"
   fi
 fi
