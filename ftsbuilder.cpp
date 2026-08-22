@@ -135,7 +135,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
   });
   if(!dbfut.get()) { return -1; }
 
-  size_t nfeats = 0;
+  std::atomic_size_t nfeats = 0;
   auto t0 = std::chrono::steady_clock::now();
   std::function<void(TileID)> buildFn = [&](TileID id){
     if(id.z < 4 || (id.z < 10 && isHeavyTile(worldGOL, id))) {
@@ -164,7 +164,7 @@ int buildSearchIndex(const Features& worldGOL, TileID toptile, const std::string
   //onSigInt = [&](){ buildWorkers.requestStop(true); };
   indexWorkers.enqueue(buildFn, toptile);
   indexWorkers.waitForIdle();
-  LOGT(t0, "%zu features processed", nfeats);
+  LOGT(t0, "%zu features processed", nfeats.load());
   dbWriter.enqueue([&](){
     LOGT(t0, "Building FTS index...");
     searchDB.exec("INSERT INTO pois_fts(pois_fts) VALUES('rebuild');");

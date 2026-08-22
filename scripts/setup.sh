@@ -5,6 +5,8 @@ set -euo pipefail
 
 #RUN_SERVER="/usr/bin/tmux new-session -d -s server 'cd $HOME/maps && ./geodesk-tiles/scripts/runsrv.sh geodesk-tiles/build/Release/server --threads 4 planet.gol ocean.gol'"
 
+ARG1="${1:?Usage: $0 <server-name>}"
+
 if [ ! -d "$HOME/maps" ]; then
   # install dependencies
   sudo apt update
@@ -59,16 +61,18 @@ EOF
 
   # nginx setup
   sudo ln -s $HOME/maps/geodesk-tiles/scripts/nginx.conf /etc/nginx/conf.d/tiles-styluslabs-com.conf
-  #sudo systemctl restart nginx  -- nginx will be reloaded by deploy_certs.sh
+  sudo systemctl restart nginx
 
   # tiles-a should be set up last so reloadcmd works normally
   if [[ "$TARGET_HOSTNAME" == *"tiles-a.styluslabs.com"* ]]; then
+    sudo mkdir -p /var/www/tiles.styluslabs.com
+    sudo chown -R $USER:$USER /var/www/tiles.styluslabs.com
     # TLS setup
     git clone --depth 1 https://github.com/acmesh-official/acme.sh.git
     (cd acme.sh && ./acme.sh --install --accountemail "support@styluslabs.com")
 
     # -w folder should be served at /.well-known/acme-challenge/
-    $HOME/.acme.sh/acme.sh --issue -d tiles.styluslabs.com -w /var/www/html
+    $HOME/.acme.sh/acme.sh --issue -d tiles.styluslabs.com -w /var/www/tiles.styluslabs.com
     $HOME/.acme.sh/acme.sh --install-cert -d tiles.styluslabs.com \
         --key-file $HOME/maps/key.pem  \
         --fullchain-file $HOME/maps/cert.pem \
@@ -82,6 +86,9 @@ cd $HOME/maps
 #wget -O planet.gob https://download.openplanetdata.com/osm/planet/gob/v1/planet-latest.osm.gob
 #gol load planet
 #rm planet.gob
+# need to see if this can recover from broken connections:
+#gol load newplanet https://download.openplanetdata.com/osm/planet/gob/v1/planet-latest.osm.gob -C 8
+#mv -f newplanet.gol planet.gol
 wget -O planet.gol https://download.openplanetdata.com/osm/planet/gol/v1/planet-latest.osm.gol &
 wait
 

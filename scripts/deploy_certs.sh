@@ -12,7 +12,7 @@ sudo systemctl reload nginx
 
 for server in "${REMOTE_SERVERS[@]}"; do
     echo "Deploying TLS certs to $server..."
-    (cd $CERT_PATH && rsync --mkpath --rsync-path="sudo rsync" tiles.styluslabs.com.* $server:$CERT_PATH/)
+    (cd $CERT_PATH && sudo rsync --mkpath --rsync-path="sudo rsync" tiles.styluslabs.com.* $server:$CERT_PATH/)
     # Reload remote Nginx (reload tells service to just reload its config instead of completely restarting, if supported)
     ssh $server "sudo systemctl reload nginx"
 done
