@@ -20,9 +20,9 @@ int main(int argc, char* argv[])
 
   TileBuilder::worldFeats = &world;
 
-  buildSearchIndex(world, TileID(516, 378, 10), "fts.sqlite");   //TileID(2, 6, 4)
+  buildSearchIndex(world, TileID(516, 378, 10), "fts2.sqlite");   //TileID(2, 6, 4)
 
-  return 0;
+  //return 0;
 
   // for(int x = 2616; x <= 2621; ++x) {
   //   for(int y = 6331; y <= 6336; ++y) {
@@ -32,7 +32,7 @@ int main(int argc, char* argv[])
   // }
 
 //   {
-//     TileID id(2065, 1512, 12);
+//     TileID id(63, 47, 7);
 //     std::string mvt = buildTile(world, ocean, id);
 //     return 0;
 //   }
