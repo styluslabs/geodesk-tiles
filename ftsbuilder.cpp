@@ -688,12 +688,14 @@ std::string ftsQuery(const std::multimap<std::string, std::string>& params, cons
     }
     if(sqlite3_create_function(searchDB.db, "osmSearchRank", -1, SQLITE_UTF8, 0, udf_osmSearchRank, 0, 0) != SQLITE_OK) {
       LOG("sqlite3_create_function: error creating osmSearchRank for search DB");
+      searchDB.close();
       return {};
     }
     //SQLITE_EXTENSION_INIT2(pApi);
     fts5_api* api = mfts5_api_from_db(searchDB.db);
     if(!api || api->xCreateFunction(api, "bm25_once", NULL, fts5Bm25Function, NULL) != SQLITE_OK) {
       LOG("error adding custom FTS5 ranking function for search DB");
+      searchDB.close();
       return {};
     }
     searchDB.searchNoDist = searchDB.stmt(searchNoDistSQL);

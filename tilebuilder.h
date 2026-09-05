@@ -38,7 +38,11 @@ public:
 
   geodesk::Box m_tileBox;
   Features* m_tileFeats = nullptr;
-  std::unique_ptr<vtzero::feature_builder> m_build;
+
+  vtzero::feature_builder* m_build = NULL;
+  std::optional<vtzero::point_feature_builder> m_pointBuild;
+  std::optional<vtzero::polygon_feature_builder> m_polyBuild;
+  std::optional<vtzero::linestring_feature_builder> m_lineBuild;
 
   // current feature
   Feature* m_feat = nullptr;  //std::reference_wrapper<Feature> m_feat;

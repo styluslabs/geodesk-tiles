@@ -378,13 +378,12 @@ vt_multi_line_string TileBuilder::loadWayFeature(Feature& way)
 void TileBuilder::buildLine(Feature& way)
 {
   vt_multi_line_string clipPts = loadWayFeature(way);
-  auto* build = static_cast<vtzero::linestring_feature_builder*>(m_build.get());
   for(auto& line : clipPts) {
     const auto& tilePts = toTilePts(line, simplify(line, simplifyThresh));
     if(tilePts.size() > 1) {
       m_hasGeom = true;
       m_builtPts += tilePts.size();
-      build->add_linestring_from_container(tilePts);
+      m_lineBuild->add_linestring_from_container(tilePts);
     }  //else LOG("Why?");
   }
 }
@@ -478,7 +477,6 @@ void TileBuilder::loadAreaFeature()
 // MVT polygon is single CCW outer ring followed by 0 or more CW inner rings; multipolygon repeats this
 void TileBuilder::buildPolygon(const vt_multi_polygon& mpoly)
 {
-  auto* build = static_cast<vtzero::polygon_feature_builder*>(m_build.get());
   for(const vt_polygon& poly : mpoly) {
     if(poly.front().size() < 4) { continue; }  // skip if outer ring is empty
     bool isouter = true;
@@ -500,7 +498,7 @@ void TileBuilder::buildPolygon(const vt_multi_polygon& mpoly)
       else {
         m_hasGeom = true;
         m_builtPts += tilePts.size();
-        build->add_ring_from_container(tilePts);
+        m_polyBuild->add_ring_from_container(tilePts);
       }
       isouter = false;  // any additional rings in this polygon are inner rings
     }
@@ -524,11 +522,14 @@ Features TileBuilder::GetMembers()
 
 void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
 {
-  if(m_build && m_hasGeom) {
+  // have to commit/rollback before creating next builder
+  if(!m_build) {}
+  else if(m_hasGeom) {
     ++m_builtFeats;
     m_build->commit();
   }
-  m_build.reset();  // have to commit/rollback before creating next builder
+  else { m_build->rollback(); }
+  m_build = NULL;
   m_hasGeom = false;
 
   if(layer.empty()) { return; }  // layer == "" to flush last feature
@@ -541,7 +542,7 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
 
   // ocean
   if(!m_feat) {
-    m_build = std::make_unique<vtzero::polygon_feature_builder>(layerBuild);
+    m_build = &m_polyBuild.emplace(layerBuild);
     buildCoastline();
   }
   else if(feature().isNode() || _centroid) {
@@ -575,24 +576,23 @@ void TileBuilder::Layer(const std::string& layer, bool isClosed, bool _centroid)
         }
       }
     }
-    auto build = std::make_unique<vtzero::point_feature_builder>(layerBuild);
+    m_build = &m_pointBuild.emplace(layerBuild);
     m_hasGeom = p.x >= 0 && p.y >= 0 && p.x <= 1 && p.y <= 1;
     if(m_hasGeom) {
       auto ip = i32vec2(p.x*tileExtent + 0.5f, (1 - p.y)*tileExtent + 0.5f);
-      build->add_point(ip.x, ip.y);
+      m_pointBuild->add_point(ip.x, ip.y);
       ++m_builtPts;
     }
-    m_build = std::move(build);
   }
   else if(feature().isArea()) {
     //if(!isClosed) { LOG("isArea() but not isClosed!"); }
-    m_build = std::make_unique<vtzero::polygon_feature_builder>(layerBuild);
+    m_build = &m_polyBuild.emplace(layerBuild);
     loadAreaFeature();
     buildPolygon(m_featMPoly);
   }
   else {
     //if(isClosed) { LOG("isClosed but not isArea()!"); }
-    m_build = std::make_unique<vtzero::linestring_feature_builder>(layerBuild);
+    m_build = &m_lineBuild.emplace(layerBuild);
     if(feature().isWay())
       buildLine(feature());
     else {  //if(feature().isRelation()) {
