@@ -36,9 +36,10 @@ SQLITE_BASE := $(MODULE_BASE)
 SQLITE_GEN := $(SQLITE_BASE)/sqlite3.h $(SQLITE_BASE)/sqlite3.c
 GENERATED += $(SQLITE_GEN)
 
-$(SQLITE_GEN):
+$(SQLITE_BASE)/sqlite3.c:
 	cd $(SQLITE_BASE) && curl "https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip" -o sqlite.zip && unzip sqlite.zip && mv sqlite-amalgamation-3490100/sqlite3.* .
 
+$(SQLITE_BASE)/sqlite3.h: $(SQLITE_BASE)/sqlite3.c
 
 ## geodesk
 MODULE_BASE = libgeodesk
