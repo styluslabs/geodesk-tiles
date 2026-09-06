@@ -346,6 +346,7 @@ void TileBuilder::buildCoastline()
 
 void TileBuilder::addCoastline(Feature& way)
 {
+  if(!way.isWay()) { return; }  // handle multipolygon relation tagged as coastline
   vt_multi_line_string clipPts = loadWayFeature(way);
   m_coastline.insert(m_coastline.end(),
       std::make_move_iterator(clipPts.begin()), std::make_move_iterator(clipPts.end()));

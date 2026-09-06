@@ -267,11 +267,7 @@ static const ZMap otherRoutes =
 //ignoredRoutes = Set { "power", "railway", "detour", "tracks", "horse", "emergency_access", "snowmobile", "historic", "running", "fitness_trail" }
 
 // bad coastline ways
-static std::unordered_set<int64_t> badCoastlines = {
-  27550479,  // fixed Jun 2025
-  1223379640, 1283812165,  // fixed in OSM on 15 Apr 2025
-  1198191751, 1198191752, 1198191749  // fixed in OSM (by me) 21 May 2025
-};
+static std::unordered_set<int64_t> badCoastlines = {};
 
 void AscendTileBuilder::ProcessRelation()
 {
