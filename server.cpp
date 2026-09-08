@@ -2,6 +2,7 @@
 
 #include <map>
 #include <fstream>
+#include <malloc.h>
 #include "tilebuilder.h"
 #define SQLITEPP_LOGE LOG
 #define SQLITEPP_LOGW LOG
@@ -230,6 +231,11 @@ Optional arguments:
   }
 
   svr.Get("/status", [&](const httplib::Request& req, httplib::Response& res) {
+    auto it = req.params.find("key");
+    if(it == req.params.end() || adminKey.empty() || it->second != adminKey) {
+      res.set_content("OK!", "text/plain");
+      return httplib::StatusCode::OK_200;
+    }
     auto now = std::chrono::system_clock::now();
     double uptime = std::chrono::duration<double>(now - time0).count();
     double dt = std::chrono::duration<double>(now - time1).count();
@@ -242,10 +248,16 @@ Optional arguments:
     double dtsearch = (stats.nssearch.load()*1.E-6)/stats.searchok.load();
     double medcached = stats.medcached.load()*1E-6;
     double medbuilt = stats.medbuilt.load()*1E-6;
+    struct mallinfo2 mi;
+    mi = mallinfo2();
+    sqlite3_int64 sqliteMem = 0, sqliteMemMax = 0;
+    sqlite3_status64(SQLITE_STATUS_MEMORY_USED, &sqliteMem, &sqliteMemMax, 0);
     // std::format not available in g++12!
     const char* statfmt =
 R"(Uptime: %.0f s
 CPU: %.3f s/%.3f s
+Memory (mallinfo2): %lluKB/%lluKB
+SQLite memory: %lldKB
 
 /v1:
   Avg response (cached): %.3f ms (med. %.3f ms)
@@ -260,9 +272,9 @@ CPU: %.3f s/%.3f s
   Reqs: %lu
   Avg response: %.3f ms
 )";
-    auto statstr = fstring(statfmt, uptime, cpudt, dt, dtcache, medcached, dtbuilt, medbuilt, stats.reqs.load(),
-        stats.reqsok.load(), stats.ofltiles.load(), stats.tilesbuilt.load(), stats.bytesout.load(),
-        stats.searchok.load(), dtsearch);
+    auto statstr = fstring(statfmt, uptime, cpudt, dt, mi.uordblks/1024, mi.arena/1024, sqliteMem/1024,
+        dtcache, medcached, dtbuilt, medbuilt, stats.reqs.load(), stats.reqsok.load(), stats.ofltiles.load(),
+        stats.tilesbuilt.load(), stats.bytesout.load(), stats.searchok.load(), dtsearch);
     res.set_content(statstr, "text/plain");
     return httplib::StatusCode::OK_200;
   });
